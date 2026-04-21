@@ -3,45 +3,70 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <title>GPS Coverage Web Tool</title>
+    <title>Navigation Tracker</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
     <script src="https://unpkg.com/@turf/turf/turf.min.js"></script>
     <style>
-        body { margin: 0; padding: 0; font-family: sans-serif; overflow: hidden; background: #f0f0f0; }
+        body { margin: 0; padding: 0; font-family: 'Pretendard', sans-serif; overflow: hidden; background: #f0f0f0; }
         #map { height: 100vh; width: 100vw; z-index: 1; }
+        
         #controls {
             position: absolute; top: 15px; left: 50%; transform: translateX(-50%);
-            z-index: 1000; background: rgba(255, 255, 255, 0.95);
-            padding: 15px; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.2);
-            text-align: center; width: 250px;
+            z-index: 1000; background: rgba(255, 255, 255, 0.98);
+            padding: 15px; border-radius: 20px; box-shadow: 0 8px 30px rgba(0,0,0,0.15);
+            text-align: center; width: 280px; border: 1px solid #ddd;
         }
-        #speed-panel { font-size: 28px; font-weight: 900; color: #222; margin-bottom: 10px; }
-        input[type="file"] { width: 100%; font-size: 12px; }
+        #speed-panel { font-size: 36px; font-weight: 900; color: #000; margin-bottom: 5px; letter-spacing: -1px; }
+        
+        #gps-status-container {
+            display: flex; align-items: center; justify-content: center;
+            gap: 8px; margin-bottom: 12px; font-size: 14px; font-weight: 700;
+        }
+        #gps-dot { width: 10px; height: 10px; border-radius: 50%; background: #ccc; }
+        .status-good { background: #00c853 !important; box-shadow: 0 0 10px #00c853; }
+        .status-normal { background: #ffab00 !important; box-shadow: 0 0 10px #ffab00; }
+        .status-bad { background: #ff1744 !important; box-shadow: 0 0 10px #ff1744; }
+
+        input[type="file"] { width: 100%; font-size: 12px; color: #666; }
+
         #locate-btn {
             position: absolute; bottom: 40px; right: 20px; z-index: 1000;
-            background: white; border: 2px solid #4285F4; border-radius: 50px;
-            padding: 15px 20px; font-size: 16px; font-weight: bold; color: #4285F4;
-            cursor: pointer; box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+            background: white; border: none; border-radius: 50px;
+            padding: 16px 24px; font-size: 16px; font-weight: 800; color: #4285F4;
+            cursor: pointer; box-shadow: 0 6px 20px rgba(0,0,0,0.25);
             display: flex; align-items: center; gap: 8px;
         }
         .active-follow { background: #4285F4 !important; color: white !important; }
+
+        /* 화살표 아이콘을 감싸는 컨테이너에 부드러운 회전 효과 부여 */
+        .arrow-container { transition: transform 0.2s ease-out; }
     </style>
 </head>
 <body>
 
     <div id="controls">
         <div id="speed-panel">0.0 km/h</div>
+        <div id="gps-status-container">
+            <div id="gps-dot"></div>
+            <span id="gps-text">신호 수신 대기 중...</span>
+        </div>
         <input type="file" id="geojson-input" accept=".geojson, .json">
     </div>
 
-    <button id="locate-btn" class="active-follow">🎯 자동 추적 중</button>
+    <button id="locate-btn" class="active-follow">🎯 실시간 추적 중</button>
     <div id="map"></div>
 
     <script>
-        const map = L.map('map', { zoomControl: false }).setView([37.5665, 126.9780], 15);
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-            subdomains: 'abcd', maxZoom: 19
+        const map = L.map('map', { 
+            zoomControl: false, 
+            tap: false,
+            wheelDebounceTime: 0
+        }).setView([37.5665, 126.9780], 17);
+
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; OpenStreetMap contributors',
+            maxZoom: 19
         }).addTo(map);
 
         L.control.zoom({ position: 'topright' }).addTo(map);
@@ -53,19 +78,27 @@
         let trackingWatchId = null;      
         let passedPathCoordinates = [];  
         let isAutoFollowing = true; 
+        let lastHeading = 0; // 화살표 방향을 기억할 변수
+
+        const gpsDot = document.getElementById('gps-dot');
+        const gpsText = document.getElementById('gps-text');
+        const speedPanel = document.getElementById('speed-panel');
+        const locateBtn = document.getElementById('locate-btn');
 
         map.on('dragstart', () => {
             isAutoFollowing = false;
-            const btn = document.getElementById('locate-btn');
-            btn.classList.remove('active-follow');
-            btn.innerText = "📍 수동 탐색 중";
+            locateBtn.classList.remove('active-follow');
+            locateBtn.innerText = "📍 수동 탐색 모드";
         });
 
-        document.getElementById('locate-btn').addEventListener('click', function() {
+        locateBtn.addEventListener('click', function() {
             isAutoFollowing = true;
             this.classList.add('active-follow');
-            this.innerText = "🎯 자동 추적 중";
-            if (userMarker) map.flyTo(userMarker.getLatLng(), 17);
+            this.innerText = "🎯 실시간 추적 중";
+            if (userMarker) {
+                // [수정됨] 사용자가 지정한 줌 레벨을 유지한 채로 위치 이동
+                map.setView(userMarker.getLatLng(), map.getZoom(), { animate: true });
+            }
         });
 
         document.getElementById('geojson-input').addEventListener('change', function(e) {
@@ -79,7 +112,7 @@
                     if (passedPolyline) map.removeLayer(passedPolyline);
                     if (trackingWatchId) navigator.geolocation.clearWatch(trackingWatchId);
                     processGeoJSON(data);
-                } catch (err) { alert('GeoJSON 파싱 실패'); }
+                } catch (err) { alert('GeoJSON 파일 오류'); }
             };
             reader.readAsText(file);
         });
@@ -87,37 +120,101 @@
         function processGeoJSON(data) {
             currentRouteGeoJSON = data;
             passedPathCoordinates = []; 
-            baseRouteLayer = L.geoJSON(data, { style: { color: '#FF0000', weight: 3, opacity: 0.4 } }).addTo(map);
+            baseRouteLayer = L.geoJSON(data, { style: { color: '#FF0000', weight: 4, opacity: 0.4 } }).addTo(map);
             map.fitBounds(baseRouteLayer.getBounds());
-            passedPolyline = L.polyline([], { color: '#555', weight: 12, opacity: 0.8, lineJoin: 'round', lineCap: 'round' }).addTo(map);
+            passedPolyline = L.polyline([], { color: '#333', weight: 14, opacity: 0.85, lineJoin: 'round', lineCap: 'round' }).addTo(map);
             startTracking();
         }
 
-        function startTracking() {
-            if (!navigator.geolocation) return alert("GPS 미지원");
-            trackingWatchId = navigator.geolocation.watchPosition((pos) => {
-                const { latitude: lat, longitude: lng, speed } = pos.coords;
-                const kmh = ((speed || 0) * 3.6).toFixed(1);
-                document.getElementById('speed-panel').innerText = `${kmh} km/h`;
+        function updateGPSStatus(accuracy) {
+            gpsDot.className = "";
+            if (accuracy < 15) {
+                gpsDot.classList.add('status-good');
+                gpsText.innerText = `GPS 양호 (${accuracy.toFixed(1)}m)`;
+                gpsText.style.color = "#00c853";
+            } else if (accuracy < 40) {
+                gpsDot.classList.add('status-normal');
+                gpsText.innerText = `GPS 보통 (${accuracy.toFixed(1)}m)`;
+                gpsText.style.color = "#ffab00";
+            } else {
+                gpsDot.classList.add('status-bad');
+                gpsText.innerText = `GPS 불량 (${accuracy.toFixed(1)}m)`;
+                gpsText.style.color = "#ff1744";
+            }
+        }
 
-                if (!userMarker) {
-                    userMarker = L.circleMarker([lat, lng], { radius: 8, fillColor: '#4285F4', fillOpacity: 1, color: 'white', weight: 3 }).addTo(map);
-                } else {
-                    userMarker.setLatLng([lat, lng]);
+        // [신규] 화살표 아이콘을 생성하는 HTML
+        function getArrowHTML(heading) {
+            return `
+                <div class="arrow-container" style="width: 32px; height: 32px; transform: rotate(${heading}deg); transform-origin: center center;">
+                    <svg viewBox="0 0 100 100" style="width: 100%; height: 100%; filter: drop-shadow(0px 2px 3px rgba(0,0,0,0.4));">
+                        <polygon points="50,10 90,90 50,70 10,90" fill="#4285F4" stroke="white" stroke-width="4"/>
+                    </svg>
+                </div>
+            `;
+        }
+
+        function startTracking() {
+            if (!navigator.geolocation) return;
+            
+            trackingWatchId = navigator.geolocation.watchPosition((pos) => {
+                const { latitude: lat, longitude: lng, speed, accuracy, heading } = pos.coords;
+                
+                updateGPSStatus(accuracy);
+                const kmh = ((speed || 0) * 3.6).toFixed(1);
+                speedPanel.innerText = `${kmh} km/h`;
+
+                const userLatLng = [lat, lng];
+
+                // 방향(heading) 데이터가 있고, 속도가 약간이라도 있을 때만 방향 업데이트
+                if (heading !== null && speed > 0.5) {
+                    lastHeading = heading;
                 }
 
-                if (isAutoFollowing) map.panTo([lat, lng]);
+                // [수정됨] 마커를 동그라미에서 화살표(divIcon)로 변경
+                const arrowIcon = L.divIcon({
+                    className: 'custom-arrow',
+                    html: getArrowHTML(lastHeading),
+                    iconSize: [32, 32],
+                    iconAnchor: [16, 16] // 중심점
+                });
+
+                if (!userMarker) {
+                    userMarker = L.marker(userLatLng, { icon: arrowIcon }).addTo(map);
+                } else {
+                    userMarker.setLatLng(userLatLng);
+                    userMarker.setIcon(arrowIcon); // 위치 갱신 시 방향도 함께 갱신
+                }
+
+                if (isAutoFollowing) {
+                    map.panTo(userLatLng, { animate: true, duration: 0.1 });
+                }
 
                 if (currentRouteGeoJSON) {
                     const userPoint = turf.point([lng, lat]);
                     const dist = turf.pointToLineDistance(userPoint, currentRouteGeoJSON, {units: 'meters'});
-                    if (dist <= 50) {
+                    const snapThreshold = Math.max(50, accuracy * 1.5); 
+                    
+                    if (dist <= snapThreshold) {
                         const snapped = turf.nearestPointOnLine(currentRouteGeoJSON, userPoint);
-                        passedPathCoordinates.push([snapped.geometry.coordinates[1], snapped.geometry.coordinates[0]]);
-                        passedPolyline.setLatLngs(passedPathCoordinates);
+                        const sLat = snapped.geometry.coordinates[1];
+                        const sLng = snapped.geometry.coordinates[0];
+
+                        if (passedPathCoordinates.length === 0 || 
+                            L.latLng(sLat, sLng).distanceTo(L.latLng(passedPathCoordinates[passedPathCoordinates.length-1])) > 1) {
+                            passedPathCoordinates.push([sLat, sLng]);
+                            passedPolyline.setLatLngs(passedPathCoordinates);
+                        }
                     }
                 }
-            }, (err) => console.error(err), { enableHighAccuracy: true });
+            }, (err) => {
+                gpsText.innerText = "GPS 신호 끊김";
+                gpsDot.className = "status-bad";
+            }, { 
+                enableHighAccuracy: true, 
+                maximumAge: 0, 
+                timeout: 5000 
+            });
         }
     </script>
 </body>
