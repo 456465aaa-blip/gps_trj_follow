@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <title>Navigation Tracker</title>
+    <title>Intelligent Navigation Tracker</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
     <script src="https://unpkg.com/@turf/turf/turf.min.js"></script>
@@ -39,8 +39,7 @@
         }
         .active-follow { background: #4285F4 !important; color: white !important; }
 
-        /* 화살표 아이콘을 감싸는 컨테이너에 부드러운 회전 효과 부여 */
-        .arrow-container { transition: transform 0.2s ease-out; }
+        .arrow-container { transition: transform 0.1s linear; }
     </style>
 </head>
 <body>
@@ -72,6 +71,7 @@
         L.control.zoom({ position: 'topright' }).addTo(map);
 
         let currentRouteGeoJSON = null; 
+        let routeSegments = []; // GeoJSON 경로를 구성하는 선분들의 배열
         let baseRouteLayer = null;       
         let passedPolyline = null;       
         let userMarker = null;           
@@ -96,7 +96,6 @@
             this.classList.add('active-follow');
             this.innerText = "🎯 실시간 추적 중";
             if (userMarker) {
-                // [수정됨] 사용자가 지정한 줌 레벨을 유지한 채로 위치 이동
                 map.setView(userMarker.getLatLng(), map.getZoom(), { animate: true });
             }
         });
@@ -117,12 +116,32 @@
             reader.readAsText(file);
         });
 
+        // 두 베어링(방향) 사이의 각도 차이를 계산하는 함수
+        function getSegmentHeadingDiff(heading1, heading2) {
+            let diff = Math.abs(heading1 - heading2) % 360;
+            if (diff > 180) diff = 360 - diff;
+            return diff;
+        }
+
         function processGeoJSON(data) {
             currentRouteGeoJSON = data;
             passedPathCoordinates = []; 
-            baseRouteLayer = L.geoJSON(data, { style: { color: '#FF0000', weight: 4, opacity: 0.4 } }).addTo(map);
+            
+            // [신규] GeoJSON 경로를 구성하는 각 선분(segment)을 분리하여 배열에 저장
+            routeSegments = [];
+            turf.segmentReduce(currentRouteGeoJSON, (previousValue, currentSegment) => {
+                routeSegments.push(currentSegment);
+                return currentSegment;
+            });
+
+            // 원본 선 (빨간색): [수정됨] 불투명도 삭제 (완전 불투명하게 설정)
+            baseRouteLayer = L.geoJSON(data, { style: { color: '#FF0000', weight: 4, opacity: 1.0 } }).addTo(map);
             map.fitBounds(baseRouteLayer.getBounds());
-            passedPolyline = L.polyline([], { color: '#333', weight: 14, opacity: 0.85, lineJoin: 'round', lineCap: 'round' }).addTo(map);
+            
+            // 지나간 길 (진회색)
+            passedPolyline = L.polyline([], { 
+                color: '#333', weight: 14, opacity: 0.85, lineJoin: 'round', lineCap: 'round' 
+            }).addTo(map);
             startTracking();
         }
 
@@ -143,7 +162,6 @@
             }
         }
 
-        // [신규] 화살표 아이콘을 생성하는 HTML
         function getArrowHTML(heading) {
             return `
                 <div class="arrow-container" style="width: 32px; height: 32px; transform: rotate(${heading}deg); transform-origin: center center;">
@@ -166,24 +184,23 @@
 
                 const userLatLng = [lat, lng];
 
-                // 방향(heading) 데이터가 있고, 속도가 약간이라도 있을 때만 방향 업데이트
+                // 속도가 일정 수준 이상일 때만 heading 데이터를 신뢰하여 업데이트
                 if (heading !== null && speed > 0.5) {
                     lastHeading = heading;
                 }
 
-                // [수정됨] 마커를 동그라미에서 화살표(divIcon)로 변경
                 const arrowIcon = L.divIcon({
                     className: 'custom-arrow',
                     html: getArrowHTML(lastHeading),
                     iconSize: [32, 32],
-                    iconAnchor: [16, 16] // 중심점
+                    iconAnchor: [16, 16] 
                 });
 
                 if (!userMarker) {
                     userMarker = L.marker(userLatLng, { icon: arrowIcon }).addTo(map);
                 } else {
                     userMarker.setLatLng(userLatLng);
-                    userMarker.setIcon(arrowIcon); // 위치 갱신 시 방향도 함께 갱신
+                    userMarker.setIcon(arrowIcon); 
                 }
 
                 if (isAutoFollowing) {
@@ -192,13 +209,47 @@
 
                 if (currentRouteGeoJSON) {
                     const userPoint = turf.point([lng, lat]);
-                    const dist = turf.pointToLineDistance(userPoint, currentRouteGeoJSON, {units: 'meters'});
                     const snapThreshold = Math.max(50, accuracy * 1.5); 
+                    
+                    // 거리가 snapThreshold 이내인 선분들을 찾고 최적의 선분을 선택
+                    const dist = turf.pointToLineDistance(userPoint, currentRouteGeoJSON, {units: 'meters'});
                     
                     if (dist <= snapThreshold) {
                         const snapped = turf.nearestPointOnLine(currentRouteGeoJSON, userPoint);
-                        const sLat = snapped.geometry.coordinates[1];
-                        const sLng = snapped.geometry.coordinates[0];
+                        let sLat = snapped.geometry.coordinates[1];
+                        let sLng = snapped.geometry.coordinates[0];
+
+                        // [보강됨] GPS heading 데이터를 활용한 지능형 상하행 보정 로직
+                        if (heading !== null && speed > 0.5 && routeSegments.length > 0) {
+                            let bestSegment = null;
+                            let minHeadingDiff = Infinity;
+
+                            // 거리가 threshold 이내인 선분들에 대해 사용자의 이동 방향과 가장 유사한 방향을 가진 선분을 선택
+                            for (const segment of routeSegments) {
+                                const segmentBearing = turf.bearing(segment.geometry.coordinates[0], segment.geometry.coordinates[1]);
+                                let segmentHeading = segmentBearing;
+                                if (segmentHeading < 0) segmentHeading += 360;
+
+                                const headingDiff = getSegmentHeadingDiff(lastHeading, segmentHeading);
+
+                                // 방향 차이가 일정 임계값(예: 45도) 이내인 선분만 고려
+                                if (headingDiff < 45 && headingDiff < minHeadingDiff) {
+                                    const pointOnSegment = turf.nearestPointOnLine(segment, userPoint);
+                                    const distOnSegment = turf.pointToLineDistance(userPoint, segment, {units: 'meters'});
+
+                                    if (distOnSegment <= snapThreshold) {
+                                        bestSegment = segment;
+                                        minHeadingDiff = headingDiff;
+                                    }
+                                }
+                            }
+
+                            if (bestSegment) {
+                                const snappedOnBestSegment = turf.nearestPointOnLine(bestSegment, userPoint);
+                                sLat = snappedOnBestSegment.geometry.coordinates[1];
+                                sLng = snappedOnBestSegment.geometry.coordinates[0];
+                            }
+                        }
 
                         if (passedPathCoordinates.length === 0 || 
                             L.latLng(sLat, sLng).distanceTo(L.latLng(passedPathCoordinates[passedPathCoordinates.length-1])) > 1) {
