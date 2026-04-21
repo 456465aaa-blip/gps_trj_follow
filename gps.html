@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>GPS Coverage Web Tool</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/@turf/turf/turf.min.js"></script>
+    <style>
+        body { margin: 0; padding: 0; font-family: sans-serif; overflow: hidden; background: #f0f0f0; }
+        #map { height: 100vh; width: 100vw; z-index: 1; }
+        #controls {
+            position: absolute; top: 15px; left: 50%; transform: translateX(-50%);
+            z-index: 1000; background: rgba(255, 255, 255, 0.95);
+            padding: 15px; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+            text-align: center; width: 250px;
+        }
+        #speed-panel { font-size: 28px; font-weight: 900; color: #222; margin-bottom: 10px; }
+        input[type="file"] { width: 100%; font-size: 12px; }
+        #locate-btn {
+            position: absolute; bottom: 40px; right: 20px; z-index: 1000;
+            background: white; border: 2px solid #4285F4; border-radius: 50px;
+            padding: 15px 20px; font-size: 16px; font-weight: bold; color: #4285F4;
+            cursor: pointer; box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+            display: flex; align-items: center; gap: 8px;
+        }
+        .active-follow { background: #4285F4 !important; color: white !important; }
+    </style>
+</head>
+<body>
+
+    <div id="controls">
+        <div id="speed-panel">0.0 km/h</div>
+        <input type="file" id="geojson-input" accept=".geojson, .json">
+    </div>
+
+    <button id="locate-btn" class="active-follow">🎯 자동 추적 중</button>
+    <div id="map"></div>
+
+    <script>
+        const map = L.map('map', { zoomControl: false }).setView([37.5665, 126.9780], 15);
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+            subdomains: 'abcd', maxZoom: 19
+        }).addTo(map);
+
+        L.control.zoom({ position: 'topright' }).addTo(map);
+
+        let currentRouteGeoJSON = null; 
+        let baseRouteLayer = null;       
+        let passedPolyline = null;       
+        let userMarker = null;           
+        let trackingWatchId = null;      
+        let passedPathCoordinates = [];  
+        let isAutoFollowing = true; 
+
+        map.on('dragstart', () => {
+            isAutoFollowing = false;
+            const btn = document.getElementById('locate-btn');
+            btn.classList.remove('active-follow');
+            btn.innerText = "📍 수동 탐색 중";
+        });
+
+        document.getElementById('locate-btn').addEventListener('click', function() {
+            isAutoFollowing = true;
+            this.classList.add('active-follow');
+            this.innerText = "🎯 자동 추적 중";
+            if (userMarker) map.flyTo(userMarker.getLatLng(), 17);
+        });
+
+        document.getElementById('geojson-input').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                try {
+                    const data = JSON.parse(e.target.result);
+                    if (baseRouteLayer) map.removeLayer(baseRouteLayer);
+                    if (passedPolyline) map.removeLayer(passedPolyline);
+                    if (trackingWatchId) navigator.geolocation.clearWatch(trackingWatchId);
+                    processGeoJSON(data);
+                } catch (err) { alert('GeoJSON 파싱 실패'); }
+            };
+            reader.readAsText(file);
+        });
+
+        function processGeoJSON(data) {
+            currentRouteGeoJSON = data;
+            passedPathCoordinates = []; 
+            baseRouteLayer = L.geoJSON(data, { style: { color: '#FF0000', weight: 3, opacity: 0.4 } }).addTo(map);
+            map.fitBounds(baseRouteLayer.getBounds());
+            passedPolyline = L.polyline([], { color: '#555', weight: 12, opacity: 0.8, lineJoin: 'round', lineCap: 'round' }).addTo(map);
+            startTracking();
+        }
+
+        function startTracking() {
+            if (!navigator.geolocation) return alert("GPS 미지원");
+            trackingWatchId = navigator.geolocation.watchPosition((pos) => {
+                const { latitude: lat, longitude: lng, speed } = pos.coords;
+                const kmh = ((speed || 0) * 3.6).toFixed(1);
+                document.getElementById('speed-panel').innerText = `${kmh} km/h`;
+
+                if (!userMarker) {
+                    userMarker = L.circleMarker([lat, lng], { radius: 8, fillColor: '#4285F4', fillOpacity: 1, color: 'white', weight: 3 }).addTo(map);
+                } else {
+                    userMarker.setLatLng([lat, lng]);
+                }
+
+                if (isAutoFollowing) map.panTo([lat, lng]);
+
+                if (currentRouteGeoJSON) {
+                    const userPoint = turf.point([lng, lat]);
+                    const dist = turf.pointToLineDistance(userPoint, currentRouteGeoJSON, {units: 'meters'});
+                    if (dist <= 50) {
+                        const snapped = turf.nearestPointOnLine(currentRouteGeoJSON, userPoint);
+                        passedPathCoordinates.push([snapped.geometry.coordinates[1], snapped.geometry.coordinates[0]]);
+                        passedPolyline.setLatLngs(passedPathCoordinates);
+                    }
+                }
+            }, (err) => console.error(err), { enableHighAccuracy: true });
+        }
+    </script>
+</body>
+</html>
