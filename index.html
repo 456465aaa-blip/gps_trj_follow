@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <title>Advanced Smooth Tracker</title>
+    <title>Absolute Snap Tracker</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
     <script src="https://unpkg.com/@turf/turf/turf.min.js"></script>
@@ -78,7 +78,7 @@
         let trackingWatchId = null;      
         let passedPathCoordinates = [];  
         let isAutoFollowing = true; 
-        let lastHeading = 0; 
+        let lastHeading = null; // [수정됨] 초기값을 0이 아닌 null로 설정하여 오작동 방지
 
         let targetLat = null;         
         let targetLng = null;         
@@ -96,9 +96,8 @@
             locateBtn.innerText = "📍 수동 탐색 모드";
         });
 
-        // 아이폰 나침반 권한 요청 및 추적 재개
         locateBtn.addEventListener('click', function() {
-            requestCompassPermission(); // 나침반 권한 요청
+            requestCompassPermission(); 
             isAutoFollowing = true;
             this.classList.add('active-follow');
             this.innerText = "🎯 실시간 추적 중";
@@ -132,11 +131,13 @@
             currentRouteGeoJSON = data;
             passedPathCoordinates = []; 
             routeSegments = [];
+            
+            // [수정됨] 복잡한 GeoJSON 파일에서 선분을 확실하게 쪼개어 담기
             try {
                 turf.segmentEach(data, (currentSegment) => {
                     routeSegments.push(currentSegment);
                 });
-            } catch(e) { console.error(e); }
+            } catch(e) { console.error("GeoJSON 선분화 오류:", e); }
 
             baseRouteLayer = L.geoJSON(data, { style: { color: '#FF0000', weight: 4, opacity: 1.0 } }).addTo(map);
             map.fitBounds(baseRouteLayer.getBounds());
@@ -146,12 +147,10 @@
             }).addTo(map);
         }
 
-        // 나침반 방향 처리 함수
         function handleOrientation(event) {
             let heading = event.webkitCompassHeading || (360 - event.alpha);
             if (heading) {
                 lastHeading = heading;
-                // 정지 상태에서도 아이콘 방향을 즉시 업데이트
                 if (userMarker) {
                     const arrowIcon = L.divIcon({
                         className: 'custom-arrow',
@@ -164,16 +163,11 @@
             }
         }
 
-        // 아이폰용 나침반 권한 요청
         function requestCompassPermission() {
             if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
-                DeviceOrientationEvent.requestPermission()
-                    .then(response => {
-                        if (response == 'granted') {
-                            window.addEventListener('deviceorientation', handleOrientation);
-                        }
-                    })
-                    .catch(console.error);
+                DeviceOrientationEvent.requestPermission().then(response => {
+                        if (response == 'granted') window.addEventListener('deviceorientation', handleOrientation);
+                    }).catch(console.error);
             } else {
                 window.addEventListener('deviceorientationabsolute', handleOrientation, true);
             }
@@ -197,8 +191,9 @@
         }
 
         function getArrowHTML(heading) {
+            const displayHeading = heading || 0; // heading이 null일 때 기본값 처리
             return `
-                <div class="arrow-container" style="width: 32px; height: 32px; transform: rotate(${heading}deg); transform-origin: center center;">
+                <div class="arrow-container" style="width: 32px; height: 32px; transform: rotate(${displayHeading}deg); transform-origin: center center;">
                     <svg viewBox="0 0 100 100" style="width: 100%; height: 100%; filter: drop-shadow(0px 2px 3px rgba(0,0,0,0.4));">
                         <polygon points="50,10 90,90 50,70 10,90" fill="#4285F4" stroke="white" stroke-width="4"/>
                     </svg>
@@ -230,56 +225,69 @@
                 const kmh = ((speed || 0) * 3.6).toFixed(1);
                 speedPanel.innerText = `${kmh} km/h`;
 
-                // 이동 중일 때는 GPS heading 우선 사용 (더 정확함)
-                if (heading !== null && speed > 0.5) {
+                if (heading !== null && !isNaN(heading) && speed > 0.5) {
                     lastHeading = heading;
                 }
 
                 let finalLat = lat;
                 let finalLng = lng;
 
-                if (currentRouteGeoJSON) {
+                // [수정됨] 완벽한 절대 스냅(Absolute Snap) 로직
+                if (routeSegments.length > 0) {
                     try {
                         const userPoint = turf.point([lng, lat]);
                         const snapThreshold = Math.max(50, accuracy * 1.5); 
-                        const dist = turf.pointToLineDistance(userPoint, currentRouteGeoJSON, {units: 'meters'});
                         
-                        if (dist <= snapThreshold) {
-                            const snapped = turf.nearestPointOnLine(currentRouteGeoJSON, userPoint);
-                            let sLat = snapped.geometry.coordinates[1];
-                            let sLng = snapped.geometry.coordinates[0];
+                        let bestSegment = null;
+                        let minDistWithHeading = Infinity;
+                        let minDistWithoutHeading = Infinity;
+                        let bestSegmentWithoutHeading = null;
 
-                            if (lastHeading !== null && routeSegments.length > 0) {
-                                let bestSegment = null;
-                                let minDist = Infinity;
-                                for (const segment of routeSegments) {
-                                    const segmentBearing = turf.bearing(segment.geometry.coordinates[0], segment.geometry.coordinates[1]);
+                        // 1. 모든 선분을 뒤져서 가장 가까운 도로들을 찾습니다.
+                        for (const segment of routeSegments) {
+                            const distToSegment = turf.pointToLineDistance(userPoint, segment, {units: 'meters'});
+                            
+                            // 내 반경(50m 등) 안에 도로가 있다면
+                            if (distToSegment <= snapThreshold) {
+                                // 방향 상관없이 일단 제일 가까운 도로를 저장 (보험용)
+                                if (distToSegment < minDistWithoutHeading) {
+                                    minDistWithoutHeading = distToSegment;
+                                    bestSegmentWithoutHeading = segment;
+                                }
+
+                                // 방향(Heading) 데이터가 유효하다면 상하행 보정 평가
+                                if (lastHeading !== null) {
+                                    const p1 = segment.geometry.coordinates[0];
+                                    const p2 = segment.geometry.coordinates[1];
+                                    const segmentBearing = turf.bearing(p1, p2);
                                     let segmentHeading = segmentBearing < 0 ? segmentBearing + 360 : segmentBearing;
                                     const headingDiff = getSegmentHeadingDiff(lastHeading, segmentHeading);
-                                    if (headingDiff < 90) {
-                                        const distOnSegment = turf.pointToLineDistance(userPoint, segment, {units: 'meters'});
-                                        if (distOnSegment <= snapThreshold && distOnSegment < minDist) {
-                                            minDist = distOnSegment;
-                                            bestSegment = segment;
-                                        }
+                                    
+                                    // 90도 이내로 올바르게 달리고 있는 도로 중 가장 가까운 것 찾기
+                                    if (headingDiff <= 90 && distToSegment < minDistWithHeading) {
+                                        minDistWithHeading = distToSegment;
+                                        bestSegment = segment;
                                     }
                                 }
-                                if (bestSegment) {
-                                    const snappedOnBestSegment = turf.nearestPointOnLine(bestSegment, userPoint);
-                                    sLat = snappedOnBestSegment.geometry.coordinates[1];
-                                    sLng = snappedOnBestSegment.geometry.coordinates[0];
-                                }
                             }
-                            finalLat = sLat;
-                            finalLng = sLng;
+                        }
 
+                        // 2. 최종 스냅 도로 결정 (방향이 맞는게 우선, 없으면 무조건 젤 가까운 곳)
+                        let targetSegment = bestSegment || bestSegmentWithoutHeading;
+
+                        if (targetSegment) {
+                            const snapped = turf.nearestPointOnLine(targetSegment, userPoint);
+                            finalLat = snapped.geometry.coordinates[1];
+                            finalLng = snapped.geometry.coordinates[0];
+
+                            // 회색 궤적 추가
                             if (passedPathCoordinates.length === 0 || 
-                                L.latLng(sLat, sLng).distanceTo(L.latLng(passedPathCoordinates[passedPathCoordinates.length-1])) > 1) {
-                                passedPathCoordinates.push([sLat, sLng]);
+                                L.latLng(finalLat, finalLng).distanceTo(L.latLng(passedPathCoordinates[passedPathCoordinates.length-1])) > 1) {
+                                passedPathCoordinates.push([finalLat, finalLng]);
                                 passedPolyline.setLatLngs(passedPathCoordinates);
                             }
                         }
-                    } catch (e) { console.error(e); }
+                    } catch (e) { console.error("스냅 연산 오류:", e); }
                 }
 
                 targetLat = finalLat;
@@ -315,7 +323,6 @@
             });
         }
 
-        // 페이지 로드 즉시 GPS 트래킹 시작
         window.onload = startTracking;
     </script>
 </body>
