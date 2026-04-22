@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <title>Intelligent Navigation Tracker</title>
+    <title>Smooth Navigation Tracker</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
     <script src="https://unpkg.com/@turf/turf/turf.min.js"></script>
@@ -38,8 +38,9 @@
             display: flex; align-items: center; gap: 8px;
         }
         .active-follow { background: #4285F4 !important; color: white !important; }
-
-        .arrow-container { transition: transform 0.1s linear; }
+        
+        /* 화살표 회전 시 부드러운 애니메이션 (방향 전환 스무딩) */
+        .arrow-container { transition: transform 0.4s ease-out; }
     </style>
 </head>
 <body>
@@ -71,14 +72,20 @@
         L.control.zoom({ position: 'topright' }).addTo(map);
 
         let currentRouteGeoJSON = null; 
-        let routeSegments = []; // GeoJSON 경로를 구성하는 선분들의 배열
+        let routeSegments = []; 
         let baseRouteLayer = null;       
         let passedPolyline = null;       
         let userMarker = null;           
         let trackingWatchId = null;      
         let passedPathCoordinates = [];  
         let isAutoFollowing = true; 
-        let lastHeading = 0; // 화살표 방향을 기억할 변수
+        let lastHeading = 0; 
+
+        // [부드러운 애니메이션을 위한 변수들]
+        let targetLat = null;         // 1초마다 들어오는 목표 위도
+        let targetLng = null;         // 1초마다 들어오는 목표 경도
+        let currentDisplayLat = null; // 화면에 그려지는 60fps 위도
+        let currentDisplayLng = null; // 화면에 그려지는 60fps 경도
 
         const gpsDot = document.getElementById('gps-dot');
         const gpsText = document.getElementById('gps-text');
@@ -95,8 +102,8 @@
             isAutoFollowing = true;
             this.classList.add('active-follow');
             this.innerText = "🎯 실시간 추적 중";
-            if (userMarker) {
-                map.setView(userMarker.getLatLng(), map.getZoom(), { animate: true });
+            if (currentDisplayLat && currentDisplayLng) {
+                map.setView([currentDisplayLat, currentDisplayLng], map.getZoom(), { animate: true });
             }
         });
 
@@ -116,7 +123,6 @@
             reader.readAsText(file);
         });
 
-        // 두 베어링(방향) 사이의 각도 차이를 계산하는 함수
         function getSegmentHeadingDiff(heading1, heading2) {
             let diff = Math.abs(heading1 - heading2) % 360;
             if (diff > 180) diff = 360 - diff;
@@ -126,19 +132,17 @@
         function processGeoJSON(data) {
             currentRouteGeoJSON = data;
             passedPathCoordinates = []; 
-            
-            // [신규] GeoJSON 경로를 구성하는 각 선분(segment)을 분리하여 배열에 저장
             routeSegments = [];
-            turf.segmentReduce(currentRouteGeoJSON, (previousValue, currentSegment) => {
-                routeSegments.push(currentSegment);
-                return currentSegment;
-            });
+            
+            try {
+                turf.segmentEach(data, (currentSegment) => {
+                    routeSegments.push(currentSegment);
+                });
+            } catch(e) { console.error(e); }
 
-            // 원본 선 (빨간색): [수정됨] 불투명도 삭제 (완전 불투명하게 설정)
             baseRouteLayer = L.geoJSON(data, { style: { color: '#FF0000', weight: 4, opacity: 1.0 } }).addTo(map);
             map.fitBounds(baseRouteLayer.getBounds());
             
-            // 지나간 길 (진회색)
             passedPolyline = L.polyline([], { 
                 color: '#333', weight: 14, opacity: 0.85, lineJoin: 'round', lineCap: 'round' 
             }).addTo(map);
@@ -172,6 +176,31 @@
             `;
         }
 
+        // [핵심] 60fps로 마커와 지도를 부드럽게 이동시키는 렌더링 루프
+        function smoothAnimate() {
+            if (targetLat !== null && targetLng !== null && userMarker) {
+                // 처음엔 현재 위치와 목표 위치를 동일하게
+                if (currentDisplayLat === null) {
+                    currentDisplayLat = targetLat;
+                    currentDisplayLng = targetLng;
+                }
+
+                // 목표 위치를 향해 매 프레임마다 거리를 좁힘 (Easing 기법)
+                const easing = 0.08; // 숫자가 작을수록 부드럽게, 클수록 빠릿하게 따라감
+                currentDisplayLat += (targetLat - currentDisplayLat) * easing;
+                currentDisplayLng += (targetLng - currentDisplayLng) * easing;
+
+                const currentLatLng = [currentDisplayLat, currentDisplayLng];
+                userMarker.setLatLng(currentLatLng);
+
+                if (isAutoFollowing) {
+                    // animate: false로 두고 우리가 직접 60프레임으로 화면을 옮김 (버벅임 제거)
+                    map.setView(currentLatLng, map.getZoom(), { animate: false });
+                }
+            }
+            requestAnimationFrame(smoothAnimate); // 다음 프레임 요청
+        }
+
         function startTracking() {
             if (!navigator.geolocation) return;
             
@@ -182,91 +211,37 @@
                 const kmh = ((speed || 0) * 3.6).toFixed(1);
                 speedPanel.innerText = `${kmh} km/h`;
 
-                const userLatLng = [lat, lng];
-
-                // 속도가 일정 수준 이상일 때만 heading 데이터를 신뢰하여 업데이트
                 if (heading !== null && speed > 0.5) {
                     lastHeading = heading;
                 }
 
-                const arrowIcon = L.divIcon({
-                    className: 'custom-arrow',
-                    html: getArrowHTML(lastHeading),
-                    iconSize: [32, 32],
-                    iconAnchor: [16, 16] 
-                });
-
-                if (!userMarker) {
-                    userMarker = L.marker(userLatLng, { icon: arrowIcon }).addTo(map);
-                } else {
-                    userMarker.setLatLng(userLatLng);
-                    userMarker.setIcon(arrowIcon); 
-                }
-
-                if (isAutoFollowing) {
-                    map.panTo(userLatLng, { animate: true, duration: 0.1 });
-                }
+                let finalLat = lat;
+                let finalLng = lng;
 
                 if (currentRouteGeoJSON) {
-                    const userPoint = turf.point([lng, lat]);
-                    const snapThreshold = Math.max(50, accuracy * 1.5); 
-                    
-                    // 거리가 snapThreshold 이내인 선분들을 찾고 최적의 선분을 선택
-                    const dist = turf.pointToLineDistance(userPoint, currentRouteGeoJSON, {units: 'meters'});
-                    
-                    if (dist <= snapThreshold) {
-                        const snapped = turf.nearestPointOnLine(currentRouteGeoJSON, userPoint);
-                        let sLat = snapped.geometry.coordinates[1];
-                        let sLng = snapped.geometry.coordinates[0];
+                    try {
+                        const userPoint = turf.point([lng, lat]);
+                        const snapThreshold = Math.max(50, accuracy * 1.5); 
+                        const dist = turf.pointToLineDistance(userPoint, currentRouteGeoJSON, {units: 'meters'});
+                        
+                        if (dist <= snapThreshold) {
+                            const snapped = turf.nearestPointOnLine(currentRouteGeoJSON, userPoint);
+                            let sLat = snapped.geometry.coordinates[1];
+                            let sLng = snapped.geometry.coordinates[0];
 
-                        // [보강됨] GPS heading 데이터를 활용한 지능형 상하행 보정 로직
-                        if (heading !== null && speed > 0.5 && routeSegments.length > 0) {
-                            let bestSegment = null;
-                            let minHeadingDiff = Infinity;
+                            if (lastHeading !== null && routeSegments.length > 0) {
+                                let bestSegment = null;
+                                let minDist = Infinity;
 
-                            // 거리가 threshold 이내인 선분들에 대해 사용자의 이동 방향과 가장 유사한 방향을 가진 선분을 선택
-                            for (const segment of routeSegments) {
-                                const segmentBearing = turf.bearing(segment.geometry.coordinates[0], segment.geometry.coordinates[1]);
-                                let segmentHeading = segmentBearing;
-                                if (segmentHeading < 0) segmentHeading += 360;
+                                for (const segment of routeSegments) {
+                                    const p1 = segment.geometry.coordinates[0];
+                                    const p2 = segment.geometry.coordinates[1];
+                                    const segmentBearing = turf.bearing(p1, p2);
+                                    let segmentHeading = segmentBearing < 0 ? segmentBearing + 360 : segmentBearing;
 
-                                const headingDiff = getSegmentHeadingDiff(lastHeading, segmentHeading);
+                                    const headingDiff = getSegmentHeadingDiff(lastHeading, segmentHeading);
 
-                                // 방향 차이가 일정 임계값(예: 45도) 이내인 선분만 고려
-                                if (headingDiff < 45 && headingDiff < minHeadingDiff) {
-                                    const pointOnSegment = turf.nearestPointOnLine(segment, userPoint);
-                                    const distOnSegment = turf.pointToLineDistance(userPoint, segment, {units: 'meters'});
-
-                                    if (distOnSegment <= snapThreshold) {
-                                        bestSegment = segment;
-                                        minHeadingDiff = headingDiff;
-                                    }
-                                }
-                            }
-
-                            if (bestSegment) {
-                                const snappedOnBestSegment = turf.nearestPointOnLine(bestSegment, userPoint);
-                                sLat = snappedOnBestSegment.geometry.coordinates[1];
-                                sLng = snappedOnBestSegment.geometry.coordinates[0];
-                            }
-                        }
-
-                        if (passedPathCoordinates.length === 0 || 
-                            L.latLng(sLat, sLng).distanceTo(L.latLng(passedPathCoordinates[passedPathCoordinates.length-1])) > 1) {
-                            passedPathCoordinates.push([sLat, sLng]);
-                            passedPolyline.setLatLngs(passedPathCoordinates);
-                        }
-                    }
-                }
-            }, (err) => {
-                gpsText.innerText = "GPS 신호 끊김";
-                gpsDot.className = "status-bad";
-            }, { 
-                enableHighAccuracy: true, 
-                maximumAge: 0, 
-                timeout: 5000 
-            });
-        }
-    </script>
-</body>
-</html>
+                                    if (headingDiff < 90) {
+                                        const distOnSegment = turf.pointToLineDistance(userPoint, segment, {units: 'meters'});
+                                        if (distOnSegment <= snapThreshold && distOnSegment < minDist) {
+                                            minDist = dist
