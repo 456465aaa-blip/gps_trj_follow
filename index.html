@@ -244,4 +244,61 @@
                                     if (headingDiff < 90) {
                                         const distOnSegment = turf.pointToLineDistance(userPoint, segment, {units: 'meters'});
                                         if (distOnSegment <= snapThreshold && distOnSegment < minDist) {
-                                            minDist = dist
+                                            minDist = distOnSegment;
+                                            bestSegment = segment;
+                                        }
+                                    }
+                                }
+
+                                if (bestSegment) {
+                                    const snappedOnBestSegment = turf.nearestPointOnLine(bestSegment, userPoint);
+                                    sLat = snappedOnBestSegment.geometry.coordinates[1];
+                                    sLng = snappedOnBestSegment.geometry.coordinates[0];
+                                }
+                            }
+
+                            finalLat = sLat;
+                            finalLng = sLng;
+
+                            if (passedPathCoordinates.length === 0 || 
+                                L.latLng(sLat, sLng).distanceTo(L.latLng(passedPathCoordinates[passedPathCoordinates.length-1])) > 1) {
+                                passedPathCoordinates.push([sLat, sLng]);
+                                passedPolyline.setLatLngs(passedPathCoordinates);
+                            }
+                        }
+                    } catch (e) { console.error(e); }
+                }
+
+                // [수정] 1초마다 들어오는 데이터를 '목표(Target)'로 설정하여 애니메이션 루프에 넘김
+                targetLat = finalLat;
+                targetLng = finalLng;
+
+                const arrowIcon = L.divIcon({
+                    className: 'custom-arrow',
+                    html: getArrowHTML(lastHeading),
+                    iconSize: [32, 32],
+                    iconAnchor: [16, 16] 
+                });
+
+                if (!userMarker) {
+                    currentDisplayLat = targetLat;
+                    currentDisplayLng = targetLng;
+                    userMarker = L.marker([targetLat, targetLng], { icon: arrowIcon }).addTo(map);
+                    // 최초 마커 생성 시 부드러운 애니메이션 루프 시작
+                    requestAnimationFrame(smoothAnimate);
+                } else {
+                    userMarker.setIcon(arrowIcon); 
+                }
+
+            }, (err) => {
+                gpsText.innerText = "GPS 신호 끊김";
+                gpsDot.className = "status-bad";
+            }, { 
+                enableHighAccuracy: true, 
+                maximumAge: 0, 
+                timeout: 5000 
+            });
+        }
+    </script>
+</body>
+</html>
