@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <title>Smooth Navigation Tracker</title>
+    <title>Smooth Navigation Tracker (Fixed)</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
     <script src="https://unpkg.com/@turf/turf/turf.min.js"></script>
@@ -39,7 +39,7 @@
         }
         .active-follow { background: #4285F4 !important; color: white !important; }
         
-        /* 화살표 회전 시 부드러운 애니메이션 (방향 전환 스무딩) */
+        /* 화살표 회전 부드럽게 */
         .arrow-container { transition: transform 0.4s ease-out; }
     </style>
 </head>
@@ -81,11 +81,11 @@
         let isAutoFollowing = true; 
         let lastHeading = 0; 
 
-        // [부드러운 애니메이션을 위한 변수들]
-        let targetLat = null;         // 1초마다 들어오는 목표 위도
-        let targetLng = null;         // 1초마다 들어오는 목표 경도
-        let currentDisplayLat = null; // 화면에 그려지는 60fps 위도
-        let currentDisplayLng = null; // 화면에 그려지는 60fps 경도
+        // 부드러운 마커 이동을 위한 변수
+        let targetLat = null;         
+        let targetLng = null;         
+        let currentDisplayLat = null; 
+        let currentDisplayLng = null; 
 
         const gpsDot = document.getElementById('gps-dot');
         const gpsText = document.getElementById('gps-text');
@@ -102,8 +102,8 @@
             isAutoFollowing = true;
             this.classList.add('active-follow');
             this.innerText = "🎯 실시간 추적 중";
-            if (currentDisplayLat && currentDisplayLng) {
-                map.setView([currentDisplayLat, currentDisplayLng], map.getZoom(), { animate: true });
+            if (targetLat !== null && targetLng !== null) {
+                map.setView([targetLat, targetLng], map.getZoom(), { animate: true });
             }
         });
 
@@ -176,29 +176,21 @@
             `;
         }
 
-        // [핵심] 60fps로 마커와 지도를 부드럽게 이동시키는 렌더링 루프
+        // [수정됨] 마커(자동차)만 60프레임으로 부드럽게 움직이도록 수정 (지도 로딩 방해 금지)
         function smoothAnimate() {
             if (targetLat !== null && targetLng !== null && userMarker) {
-                // 처음엔 현재 위치와 목표 위치를 동일하게
                 if (currentDisplayLat === null) {
                     currentDisplayLat = targetLat;
                     currentDisplayLng = targetLng;
                 }
-
-                // 목표 위치를 향해 매 프레임마다 거리를 좁힘 (Easing 기법)
-                const easing = 0.08; // 숫자가 작을수록 부드럽게, 클수록 빠릿하게 따라감
+                const easing = 0.1; // 마커 추격 속도
                 currentDisplayLat += (targetLat - currentDisplayLat) * easing;
                 currentDisplayLng += (targetLng - currentDisplayLng) * easing;
 
-                const currentLatLng = [currentDisplayLat, currentDisplayLng];
-                userMarker.setLatLng(currentLatLng);
-
-                if (isAutoFollowing) {
-                    // animate: false로 두고 우리가 직접 60프레임으로 화면을 옮김 (버벅임 제거)
-                    map.setView(currentLatLng, map.getZoom(), { animate: false });
-                }
+                // 마커 위치만 60fps로 업데이트
+                userMarker.setLatLng([currentDisplayLat, currentDisplayLng]);
             }
-            requestAnimationFrame(smoothAnimate); // 다음 프레임 요청
+            requestAnimationFrame(smoothAnimate); 
         }
 
         function startTracking() {
@@ -218,6 +210,7 @@
                 let finalLat = lat;
                 let finalLng = lng;
 
+                // 스냅 로직
                 if (currentRouteGeoJSON) {
                     try {
                         const userPoint = turf.point([lng, lat]);
@@ -269,7 +262,7 @@
                     } catch (e) { console.error(e); }
                 }
 
-                // [수정] 1초마다 들어오는 데이터를 '목표(Target)'로 설정하여 애니메이션 루프에 넘김
+                // 1. 마커 목표 위치 업데이트 (애니메이션 루프가 부드럽게 추격함)
                 targetLat = finalLat;
                 targetLng = finalLng;
 
@@ -284,10 +277,14 @@
                     currentDisplayLat = targetLat;
                     currentDisplayLng = targetLng;
                     userMarker = L.marker([targetLat, targetLng], { icon: arrowIcon }).addTo(map);
-                    // 최초 마커 생성 시 부드러운 애니메이션 루프 시작
-                    requestAnimationFrame(smoothAnimate);
+                    requestAnimationFrame(smoothAnimate); // 마커 애니메이션 시작
                 } else {
                     userMarker.setIcon(arrowIcon); 
+                }
+
+                // [핵심 수정] 2. 지도는 1초(duration: 1.0)에 걸쳐 부드럽게 한 번만 이동 명령
+                if (isAutoFollowing) {
+                    map.panTo([targetLat, targetLng], { animate: true, duration: 1.0, easeLinearity: 1 });
                 }
 
             }, (err) => {
