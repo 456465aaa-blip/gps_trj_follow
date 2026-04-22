@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <title>Smooth Navigation Tracker (Fixed)</title>
+    <title>Advanced Smooth Tracker</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
     <script src="https://unpkg.com/@turf/turf/turf.min.js"></script>
@@ -39,8 +39,7 @@
         }
         .active-follow { background: #4285F4 !important; color: white !important; }
         
-        /* 화살표 회전 부드럽게 */
-        .arrow-container { transition: transform 0.4s ease-out; }
+        .arrow-container { transition: transform 0.2s linear; }
     </style>
 </head>
 <body>
@@ -81,7 +80,6 @@
         let isAutoFollowing = true; 
         let lastHeading = 0; 
 
-        // 부드러운 마커 이동을 위한 변수
         let targetLat = null;         
         let targetLng = null;         
         let currentDisplayLat = null; 
@@ -98,7 +96,9 @@
             locateBtn.innerText = "📍 수동 탐색 모드";
         });
 
+        // 아이폰 나침반 권한 요청 및 추적 재개
         locateBtn.addEventListener('click', function() {
+            requestCompassPermission(); // 나침반 권한 요청
             isAutoFollowing = true;
             this.classList.add('active-follow');
             this.innerText = "🎯 실시간 추적 중";
@@ -116,7 +116,6 @@
                     const data = JSON.parse(e.target.result);
                     if (baseRouteLayer) map.removeLayer(baseRouteLayer);
                     if (passedPolyline) map.removeLayer(passedPolyline);
-                    if (trackingWatchId) navigator.geolocation.clearWatch(trackingWatchId);
                     processGeoJSON(data);
                 } catch (err) { alert('GeoJSON 파일 오류'); }
             };
@@ -133,7 +132,6 @@
             currentRouteGeoJSON = data;
             passedPathCoordinates = []; 
             routeSegments = [];
-            
             try {
                 turf.segmentEach(data, (currentSegment) => {
                     routeSegments.push(currentSegment);
@@ -146,7 +144,39 @@
             passedPolyline = L.polyline([], { 
                 color: '#333', weight: 14, opacity: 0.85, lineJoin: 'round', lineCap: 'round' 
             }).addTo(map);
-            startTracking();
+        }
+
+        // 나침반 방향 처리 함수
+        function handleOrientation(event) {
+            let heading = event.webkitCompassHeading || (360 - event.alpha);
+            if (heading) {
+                lastHeading = heading;
+                // 정지 상태에서도 아이콘 방향을 즉시 업데이트
+                if (userMarker) {
+                    const arrowIcon = L.divIcon({
+                        className: 'custom-arrow',
+                        html: getArrowHTML(lastHeading),
+                        iconSize: [32, 32],
+                        iconAnchor: [16, 16] 
+                    });
+                    userMarker.setIcon(arrowIcon);
+                }
+            }
+        }
+
+        // 아이폰용 나침반 권한 요청
+        function requestCompassPermission() {
+            if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+                DeviceOrientationEvent.requestPermission()
+                    .then(response => {
+                        if (response == 'granted') {
+                            window.addEventListener('deviceorientation', handleOrientation);
+                        }
+                    })
+                    .catch(console.error);
+            } else {
+                window.addEventListener('deviceorientationabsolute', handleOrientation, true);
+            }
         }
 
         function updateGPSStatus(accuracy) {
@@ -176,18 +206,15 @@
             `;
         }
 
-        // [수정됨] 마커(자동차)만 60프레임으로 부드럽게 움직이도록 수정 (지도 로딩 방해 금지)
         function smoothAnimate() {
             if (targetLat !== null && targetLng !== null && userMarker) {
                 if (currentDisplayLat === null) {
                     currentDisplayLat = targetLat;
                     currentDisplayLng = targetLng;
                 }
-                const easing = 0.1; // 마커 추격 속도
+                const easing = 0.1;
                 currentDisplayLat += (targetLat - currentDisplayLat) * easing;
                 currentDisplayLng += (targetLng - currentDisplayLng) * easing;
-
-                // 마커 위치만 60fps로 업데이트
                 userMarker.setLatLng([currentDisplayLat, currentDisplayLng]);
             }
             requestAnimationFrame(smoothAnimate); 
@@ -203,6 +230,7 @@
                 const kmh = ((speed || 0) * 3.6).toFixed(1);
                 speedPanel.innerText = `${kmh} km/h`;
 
+                // 이동 중일 때는 GPS heading 우선 사용 (더 정확함)
                 if (heading !== null && speed > 0.5) {
                     lastHeading = heading;
                 }
@@ -210,7 +238,6 @@
                 let finalLat = lat;
                 let finalLng = lng;
 
-                // 스냅 로직
                 if (currentRouteGeoJSON) {
                     try {
                         const userPoint = turf.point([lng, lat]);
@@ -225,15 +252,10 @@
                             if (lastHeading !== null && routeSegments.length > 0) {
                                 let bestSegment = null;
                                 let minDist = Infinity;
-
                                 for (const segment of routeSegments) {
-                                    const p1 = segment.geometry.coordinates[0];
-                                    const p2 = segment.geometry.coordinates[1];
-                                    const segmentBearing = turf.bearing(p1, p2);
+                                    const segmentBearing = turf.bearing(segment.geometry.coordinates[0], segment.geometry.coordinates[1]);
                                     let segmentHeading = segmentBearing < 0 ? segmentBearing + 360 : segmentBearing;
-
                                     const headingDiff = getSegmentHeadingDiff(lastHeading, segmentHeading);
-
                                     if (headingDiff < 90) {
                                         const distOnSegment = turf.pointToLineDistance(userPoint, segment, {units: 'meters'});
                                         if (distOnSegment <= snapThreshold && distOnSegment < minDist) {
@@ -242,14 +264,12 @@
                                         }
                                     }
                                 }
-
                                 if (bestSegment) {
                                     const snappedOnBestSegment = turf.nearestPointOnLine(bestSegment, userPoint);
                                     sLat = snappedOnBestSegment.geometry.coordinates[1];
                                     sLng = snappedOnBestSegment.geometry.coordinates[0];
                                 }
                             }
-
                             finalLat = sLat;
                             finalLng = sLng;
 
@@ -262,7 +282,6 @@
                     } catch (e) { console.error(e); }
                 }
 
-                // 1. 마커 목표 위치 업데이트 (애니메이션 루프가 부드럽게 추격함)
                 targetLat = finalLat;
                 targetLng = finalLng;
 
@@ -277,12 +296,11 @@
                     currentDisplayLat = targetLat;
                     currentDisplayLng = targetLng;
                     userMarker = L.marker([targetLat, targetLng], { icon: arrowIcon }).addTo(map);
-                    requestAnimationFrame(smoothAnimate); // 마커 애니메이션 시작
+                    requestAnimationFrame(smoothAnimate);
                 } else {
                     userMarker.setIcon(arrowIcon); 
                 }
 
-                // [핵심 수정] 2. 지도는 1초(duration: 1.0)에 걸쳐 부드럽게 한 번만 이동 명령
                 if (isAutoFollowing) {
                     map.panTo([targetLat, targetLng], { animate: true, duration: 1.0, easeLinearity: 1 });
                 }
@@ -296,6 +314,9 @@
                 timeout: 5000 
             });
         }
+
+        // 페이지 로드 즉시 GPS 트래킹 시작
+        window.onload = startTracking;
     </script>
 </body>
 </html>
