@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <title>Kakao Route Optimizer</title>
+    <title>Ultimate Kakao Tracker</title>
     <script type="text/javascript" src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=34bd25e1ff5410300affbf08cb002b43"></script>
     <script src="https://unpkg.com/@turf/turf/turf.min.js"></script>
     <style>
@@ -54,7 +54,8 @@
     <div id="map"></div>
 
     <script>
-        const REST_API_KEY = '01100485c54fdcb6ce3817a5097f322d'; // 보내주신 REST API 키 적용
+        // 카카오 REST API 키 (길찾기 자동 보정용)
+        const REST_API_KEY = '01100485c54fdcb6ce3817a5097f322d'; 
         
         const container = document.getElementById('map');
         const options = { center: new kakao.maps.LatLng(37.5665, 126.9780), level: 3 };
@@ -65,6 +66,7 @@
         let baseRouteLayer = null;       
         let passedPolyline = null;       
         let userMarker = null;           
+        let trackingWatchId = null;
         let passedPathCoordinates = [];  
         let isAutoFollowing = true; 
         let lastHeading = null; 
@@ -96,16 +98,23 @@
         }
 
         kakao.maps.event.addListener(map, 'zoom_changed', updateLineWeight);
+        
         kakao.maps.event.addListener(map, 'dragstart', () => {
             isAutoFollowing = false;
             locateBtn.classList.remove('active-follow');
             locateBtn.innerText = "📍 수동 탐색 모드";
         });
 
+        // (복구됨) 아이폰 나침반 권한 완벽 요청
         locateBtn.addEventListener('click', function() {
             if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
-                DeviceOrientationEvent.requestPermission();
+                DeviceOrientationEvent.requestPermission().then(response => {
+                    if (response === 'granted') window.addEventListener('deviceorientation', handleOrientation);
+                }).catch(console.error);
+            } else {
+                window.addEventListener('deviceorientationabsolute', handleOrientation, true);
             }
+            
             isAutoFollowing = true;
             this.classList.add('active-follow');
             this.innerText = "🎯 실시간 추적 중";
@@ -121,27 +130,31 @@
             reader.onload = async (e) => {
                 try {
                     const data = JSON.parse(e.target.result);
-                    loadingOverlay.style.display = 'flex';
+                    loadingOverlay.style.display = 'flex'; // 보정 중 안내 켜기
+                    
+                    // 길찾기 API 호출 (자동 보정)
                     const correctedData = await getKakaoCorrectedRoute(data);
-                    loadingOverlay.style.display = 'none';
+                    
+                    loadingOverlay.style.display = 'none'; // 보정 중 안내 끄기
                     
                     if (baseRouteLayer) baseRouteLayer.setMap(null);
                     if (passedPolyline) passedPolyline.setMap(null);
                     processGeoJSON(correctedData);
                 } catch (err) { 
                     loadingOverlay.style.display = 'none';
-                    alert('보정 중 오류가 발생했습니다.'); 
+                    alert('보정 중 오류가 발생했습니다. 원본을 띄웁니다.'); 
+                    processGeoJSON(JSON.parse(e.target.result)); // 실패하면 원본 파일 그대로 그림
                 }
             };
             reader.readAsText(file);
         });
 
-        // [핵심] 카카오 길찾기 API를 이용한 경로 보정 함수
+        // 카카오 길찾기 API를 이용한 경로 세탁(Map Matching)
         async function getKakaoCorrectedRoute(geojson) {
             const coords = [];
             turf.coordEach(geojson, (c) => coords.push(c));
             
-            // API 제한(30개 경유지)을 위해 30개 포인트로 샘플링
+            // 경유지 30개 제한을 위해 등간격으로 샘플링
             const step = Math.ceil(coords.length / 28);
             const waypoints = [];
             for (let i = step; i < coords.length - step; i += step) {
@@ -172,23 +185,22 @@
             if (result.routes && result.routes[0]) {
                 const newCoords = [];
                 result.routes[0].sections.forEach(section => {
-                    section.guides.forEach(guide => {
-                        // 가이드 포인트만으로는 부족하므로 실제 도로 형상(line) 데이터를 추출해야함
-                    });
                     section.roads.forEach(road => {
                         for (let i = 0; i < road.vertexes.length; i += 2) {
+                            // 카카오는 [x, y] 순서
                             newCoords.push([road.vertexes[i], road.vertexes[i+1]]);
                         }
                     });
                 });
                 return turf.lineString(newCoords);
             }
-            return geojson; // 실패 시 원본 반환
+            return geojson; 
         }
 
         function processGeoJSON(data) {
             currentRouteGeoJSON = data;
-            passedPathCoordinates = []; routeSegments = [];
+            passedPathCoordinates = []; 
+            routeSegments = [];
             let kakaoPaths = [];
             let bounds = new kakao.maps.LatLngBounds();
 
@@ -198,25 +210,30 @@
                     currentSegment.segmentId = segmentId++;
                     routeSegments.push(currentSegment);
                 });
+                
                 turf.coordEach(data, (c) => {
                     const latLng = new kakao.maps.LatLng(c[1], c[0]);
                     kakaoPaths.push(latLng);
                     bounds.extend(latLng);
                 });
-            } catch(e) { console.error(e); }
+            } catch(e) { console.error("데이터 변환 오류", e); }
 
             const initialWeight = getDynamicWeight();
+            
             baseRouteLayer = new kakao.maps.Polyline({
-                path: kakaoPaths, strokeWeight: initialWeight, strokeColor: '#FF3B30', strokeOpacity: 1.0
+                path: kakaoPaths, strokeWeight: initialWeight, strokeColor: '#FF3B30', strokeOpacity: 1.0, strokeStyle: 'solid'
             });
             baseRouteLayer.setMap(map);
+            
             passedPolyline = new kakao.maps.Polyline({
-                path: [], strokeWeight: initialWeight, strokeColor: '#8E8E93', strokeOpacity: 1.0
+                path: [], strokeWeight: initialWeight, strokeColor: '#8E8E93', strokeOpacity: 1.0, strokeStyle: 'solid'
             });
             passedPolyline.setMap(map);
+            
             map.setBounds(bounds);
         }
 
+        // 정지 상태 방향 (나침반)
         function handleOrientation(event) {
             let heading = event.webkitCompassHeading || (360 - event.alpha);
             if (heading && userMarker && movementBearing === null) {
@@ -234,6 +251,7 @@
                 </div>`;
         }
 
+        // 60fps 부드러운 애니메이션
         function smoothAnimate() {
             if (targetLat !== null && userMarker) {
                 if (currentDisplayLat === null) { currentDisplayLat = targetLat; currentDisplayLng = targetLng; }
@@ -244,56 +262,88 @@
             requestAnimationFrame(smoothAnimate);
         }
 
-        navigator.geolocation.watchPosition((pos) => {
-            const { latitude: lat, longitude: lng, speed, accuracy, heading } = pos.coords;
-            const kmh = ((speed || 0) * 3.6).toFixed(1);
-            speedPanel.innerText = `${kmh} km/h`;
+        // 추적 메인 루프
+        function startTracking() {
+            if (!navigator.geolocation) return;
             
-            gpsDot.className = accuracy < 15 ? "status-good" : (accuracy < 40 ? "status-normal" : "status-bad");
-            gpsText.innerText = `GPS ${accuracy < 15 ? '양호' : '불량'} (${accuracy.toFixed(1)}m)`;
+            trackingWatchId = navigator.geolocation.watchPosition((pos) => {
+                const { latitude: lat, longitude: lng, speed, accuracy, heading } = pos.coords;
+                const kmh = ((speed || 0) * 3.6).toFixed(1);
+                speedPanel.innerText = `${kmh} km/h`;
+                
+                gpsDot.className = accuracy < 15 ? "status-good" : (accuracy < 40 ? "status-normal" : "status-bad");
+                gpsText.innerText = `GPS ${accuracy < 15 ? '양호' : (accuracy < 40 ? '보통' : '불량')} (${accuracy.toFixed(1)}m)`;
 
-            let fLat = lat, fLng = lng;
-            if (routeSegments.length > 0) {
-                const userPoint = turf.point([lng, lat]);
-                const snapThreshold = Math.min(20, Math.max(15, accuracy * 0.8));
-                let minD = Infinity, bestS = null;
+                if (heading !== null && !isNaN(heading) && speed > 0.5) lastHeading = heading;
 
-                for (const s of routeSegments) {
-                    let d = turf.pointToLineDistance(userPoint, s, {units: 'meters'});
-                    if (lastSelectedSegmentId !== null && s.segmentId !== lastSelectedSegmentId) d += 10;
-                    if (d < minD && d <= snapThreshold) { minD = d; bestS = s; }
-                }
+                let fLat = lat, fLng = lng;
 
-                if (bestS) {
-                    lastSelectedSegmentId = bestS.segmentId;
-                    const snapped = turf.nearestPointOnLine(bestS, userPoint);
-                    fLat = snapped.geometry.coordinates[1]; fLng = snapped.geometry.coordinates[0];
-                    
-                    if (passedPathCoordinates.length === 0 || 
-                        turf.distance(turf.point([fLng, fLat]), turf.point([passedPathCoordinates[passedPathCoordinates.length-1].getLng(), passedPathCoordinates[passedPathCoordinates.length-1].getLat()]), {units: 'meters'}) > 1) {
-                        passedPathCoordinates.push(new kakao.maps.LatLng(fLat, fLng));
-                        passedPolyline.setPath(passedPathCoordinates);
+                if (routeSegments.length > 0) {
+                    const userPoint = turf.point([lng, lat]);
+                    // 극한의 오차(Absolute Snap) 방지 제한
+                    const snapThreshold = Math.min(20, Math.max(15, accuracy * 0.8));
+                    let minDWithout = Infinity, minDWith = Infinity, bestSWithout = null, bestS = null;
+
+                    for (const s of routeSegments) {
+                        let d = turf.pointToLineDistance(userPoint, s, {units: 'meters'});
+                        
+                        if (d <= snapThreshold) {
+                            // 교차로 튐 방지 페널티 (Sticky Snap)
+                            if (lastSelectedSegmentId !== null && s.segmentId !== lastSelectedSegmentId) d += 10;
+                            
+                            if (d < minDWithout) { minDWithout = d; bestSWithout = s; }
+
+                            if (lastHeading !== null) {
+                                const p1 = s.geometry.coordinates[0], p2 = s.geometry.coordinates[1];
+                                const sB = turf.bearing(p1, p2);
+                                const sH = sB < 0 ? sB + 360 : sB;
+                                const hD = getSegmentHeadingDiff(lastHeading, sH);
+                                
+                                // 상하행 보정 평가
+                                if (hD <= 90 && d < minDWith) { minDWith = d; bestS = s; }
+                            }
+                        }
+                    }
+
+                    const targetSegment = bestS || bestSWithout;
+                    if (targetSegment) {
+                        lastSelectedSegmentId = targetSegment.segmentId;
+                        const snapped = turf.nearestPointOnLine(targetSegment, userPoint);
+                        fLat = snapped.geometry.coordinates[1]; fLng = snapped.geometry.coordinates[0];
+                        
+                        // 색상 덧칠 (Red to Gray)
+                        if (passedPathCoordinates.length === 0 || 
+                            turf.distance(turf.point([fLng, fLat]), turf.point([passedPathCoordinates[passedPathCoordinates.length-1].getLng(), passedPathCoordinates[passedPathCoordinates.length-1].getLat()]), {units: 'meters'}) > 1) {
+                            passedPathCoordinates.push(new kakao.maps.LatLng(fLat, fLng));
+                            passedPolyline.setPath(passedPathCoordinates);
+                        }
                     }
                 }
-            }
 
-            targetLat = fLat; targetLng = fLng;
-            if (prevFinalLat) {
-                const dm = turf.distance(turf.point([prevFinalLng, prevFinalLat]), turf.point([fLng, fLat]), {units: 'meters'});
-                if (dm > 1) {
-                    movementBearing = (turf.bearing(turf.point([prevFinalLng, prevFinalLat]), turf.point([fLng, fLat])) + 360) % 360;
-                    prevFinalLat = fLat; prevFinalLng = fLng;
-                }
-            } else { prevFinalLat = fLat; prevFinalLng = fLng; }
+                targetLat = fLat; targetLng = fLng;
 
-            const aH = movementBearing !== null ? movementBearing : (heading || 0);
-            if (!userMarker) {
-                userMarker = new kakao.maps.CustomOverlay({ position: new kakao.maps.LatLng(fLat, fLng), content: getArrowHTML(aH), xAnchor: 0.5, yAnchor: 0.5 });
-                userMarker.setMap(map); smoothAnimate();
-            } else { userMarker.setContent(getArrowHTML(aH)); }
-            if (isAutoFollowing) map.panTo(new kakao.maps.LatLng(fLat, fLng));
+                // 실제 주행 방향 나침반 보정 (Movement Bearing)
+                if (prevFinalLat) {
+                    const dm = turf.distance(turf.point([prevFinalLng, prevFinalLat]), turf.point([fLng, fLat]), {units: 'meters'});
+                    if (dm > 1) {
+                        movementBearing = (turf.bearing(turf.point([prevFinalLng, prevFinalLat]), turf.point([fLng, fLat])) + 360) % 360;
+                        prevFinalLat = fLat; prevFinalLng = fLng;
+                    }
+                } else { prevFinalLat = fLat; prevFinalLng = fLng; }
 
-        }, null, { enableHighAccuracy: true });
+                const aH = movementBearing !== null ? movementBearing : (lastHeading || 0);
+
+                if (!userMarker) {
+                    userMarker = new kakao.maps.CustomOverlay({ position: new kakao.maps.LatLng(fLat, fLng), content: getArrowHTML(aH), xAnchor: 0.5, yAnchor: 0.5 });
+                    userMarker.setMap(map); smoothAnimate();
+                } else { userMarker.setContent(getArrowHTML(aH)); }
+                
+                if (isAutoFollowing) map.panTo(new kakao.maps.LatLng(fLat, fLng));
+
+            }, null, { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 });
+        }
+
+        window.onload = startTracking;
     </script>
 </body>
 </html>
