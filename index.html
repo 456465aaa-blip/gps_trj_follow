@@ -3,9 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <title>Dynamic Weight & Stable Tracker</title>
-    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
-    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <title>Kakao Map Tracker</title>
+    <script type="text/javascript" src="//dapi.kakao.com/v2/maps/sdk.js?appkey=34bd25e1ff5410300affbf08cb002b43"></script>
     <script src="https://unpkg.com/@turf/turf/turf.min.js"></script>
     <style>
         body { margin: 0; padding: 0; font-family: 'Pretendard', sans-serif; overflow: hidden; background: #f0f0f0; }
@@ -48,7 +47,7 @@
         <div id="speed-panel">0.0 km/h</div>
         <div id="gps-status-container">
             <div id="gps-dot"></div>
-            <span id="gps-text">신호 수신 대기 중...</span>
+            <span id="gps-text">지도 로딩 중...</span>
         </div>
         <input type="file" id="geojson-input" accept=".geojson, .json">
     </div>
@@ -57,18 +56,13 @@
     <div id="map"></div>
 
     <script>
-        const map = L.map('map', { 
-            zoomControl: false, 
-            tap: false,
-            wheelDebounceTime: 0
-        }).setView([37.5665, 126.9780], 17);
-
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            attribution: '&copy; OpenStreetMap contributors',
-            maxZoom: 19
-        }).addTo(map);
-
-        L.control.zoom({ position: 'topright' }).addTo(map);
+        // 카카오맵 초기화 (카카오는 줌 레벨 숫자가 낮을수록 확대됨)
+        const container = document.getElementById('map');
+        const options = {
+            center: new kakao.maps.LatLng(37.5665, 126.9780),
+            level: 3 // 기본 확대 레벨
+        };
+        const map = new kakao.maps.Map(container, options);
 
         let currentRouteGeoJSON = null; 
         let routeSegments = []; 
@@ -95,27 +89,25 @@
         const speedPanel = document.getElementById('speed-panel');
         const locateBtn = document.getElementById('locate-btn');
 
-        // [신규] 현재 줌 레벨에 따른 적정 선 두께 계산 함수
+        // 카카오맵 전용 줌 레벨에 맞춘 다이내믹 선 두께
         function getDynamicWeight() {
-            const zoom = map.getZoom();
-            if (zoom >= 19) return 16;
-            if (zoom === 18) return 12;
-            if (zoom === 17) return 8;
-            if (zoom === 16) return 5;
+            const level = map.getLevel();
+            if (level <= 1) return 16;
+            if (level === 2) return 12;
+            if (level === 3) return 8;
+            if (level === 4) return 5;
             return 3;
         }
 
-        // [신규] 줌 변경 시 선 두께를 실시간 업데이트하는 함수
         function updateLineWeight() {
             const dynamicWeight = getDynamicWeight();
-            if (baseRouteLayer) baseRouteLayer.setStyle({ weight: dynamicWeight });
-            if (passedPolyline) passedPolyline.setStyle({ weight: dynamicWeight });
+            if (baseRouteLayer) baseRouteLayer.setOptions({ strokeWeight: dynamicWeight });
+            if (passedPolyline) passedPolyline.setOptions({ strokeWeight: dynamicWeight });
         }
 
-        // 지도를 줌(확대/축소) 할 때마다 두께 업데이트 실행
-        map.on('zoomend', updateLineWeight);
-
-        map.on('dragstart', () => {
+        kakao.maps.event.addListener(map, 'zoom_changed', updateLineWeight);
+        
+        kakao.maps.event.addListener(map, 'dragstart', () => {
             isAutoFollowing = false;
             locateBtn.classList.remove('active-follow');
             locateBtn.innerText = "📍 수동 탐색 모드";
@@ -127,7 +119,7 @@
             this.classList.add('active-follow');
             this.innerText = "🎯 실시간 추적 중";
             if (targetLat !== null && targetLng !== null) {
-                map.setView([targetLat, targetLng], map.getZoom(), { animate: true });
+                map.panTo(new kakao.maps.LatLng(targetLat, targetLng));
             }
         });
 
@@ -138,8 +130,8 @@
             reader.onload = (e) => {
                 try {
                     const data = JSON.parse(e.target.result);
-                    if (baseRouteLayer) map.removeLayer(baseRouteLayer);
-                    if (passedPolyline) map.removeLayer(passedPolyline);
+                    if (baseRouteLayer) baseRouteLayer.setMap(null);
+                    if (passedPolyline) passedPolyline.setMap(null);
                     processGeoJSON(data);
                 } catch (err) { alert('GeoJSON 파일 오류'); }
             };
@@ -157,25 +149,47 @@
             passedPathCoordinates = []; 
             routeSegments = [];
             
+            let kakaoPaths = [];
+            let bounds = new kakao.maps.LatLngBounds();
+
             try {
                 let segmentId = 0;
                 turf.segmentEach(data, (currentSegment) => {
                     currentSegment.segmentId = segmentId++;
                     routeSegments.push(currentSegment);
                 });
-            } catch(e) { console.error("GeoJSON 선분화 오류:", e); }
 
-            // 최초 렌더링 시 현재 줌 레벨에 맞는 두께 적용
+                // 카카오맵에 그리기 위한 좌표 배열 추출
+                turf.coordEach(data, (currentCoord) => {
+                    const latLng = new kakao.maps.LatLng(currentCoord[1], currentCoord[0]);
+                    kakaoPaths.push(latLng);
+                    bounds.extend(latLng);
+                });
+            } catch(e) { console.error("GeoJSON 파싱 오류:", e); }
+
             const initialWeight = getDynamicWeight();
 
-            baseRouteLayer = L.geoJSON(data, { 
-                style: { color: '#FF3B30', weight: initialWeight, opacity: 1.0, lineJoin: 'round', lineCap: 'round' } 
-            }).addTo(map);
-            map.fitBounds(baseRouteLayer.getBounds());
+            // 빨간색 원본 선
+            baseRouteLayer = new kakao.maps.Polyline({
+                path: kakaoPaths,
+                strokeWeight: initialWeight,
+                strokeColor: '#FF3B30',
+                strokeOpacity: 1.0,
+                strokeStyle: 'solid'
+            });
+            baseRouteLayer.setMap(map);
             
-            passedPolyline = L.polyline([], { 
-                color: '#8E8E93', weight: initialWeight, opacity: 1.0, lineJoin: 'round', lineCap: 'round' 
-            }).addTo(map);
+            // 지나간 회색 선
+            passedPolyline = new kakao.maps.Polyline({
+                path: [],
+                strokeWeight: initialWeight,
+                strokeColor: '#8E8E93',
+                strokeOpacity: 1.0,
+                strokeStyle: 'solid'
+            });
+            passedPolyline.setMap(map);
+
+            map.setBounds(bounds);
         }
 
         function handleOrientation(event) {
@@ -183,13 +197,7 @@
             if (heading) {
                 lastHeading = heading;
                 if (userMarker && movementBearing === null) {
-                    const arrowIcon = L.divIcon({
-                        className: 'custom-arrow',
-                        html: getArrowHTML(lastHeading),
-                        iconSize: [32, 32],
-                        iconAnchor: [16, 16] 
-                    });
-                    userMarker.setIcon(arrowIcon);
+                    userMarker.setContent(getArrowHTML(lastHeading));
                 }
             }
         }
@@ -241,7 +249,8 @@
                 const easing = 0.1;
                 currentDisplayLat += (targetLat - currentDisplayLat) * easing;
                 currentDisplayLng += (targetLng - currentDisplayLng) * easing;
-                userMarker.setLatLng([currentDisplayLat, currentDisplayLng]);
+                
+                userMarker.setPosition(new kakao.maps.LatLng(currentDisplayLat, currentDisplayLng));
             }
             requestAnimationFrame(smoothAnimate); 
         }
@@ -313,9 +322,10 @@
                             finalLng = snapped.geometry.coordinates[0];
 
                             if (passedPathCoordinates.length === 0 || 
-                                L.latLng(finalLat, finalLng).distanceTo(L.latLng(passedPathCoordinates[passedPathCoordinates.length-1])) > 1) {
-                                passedPathCoordinates.push([finalLat, finalLng]);
-                                passedPolyline.setLatLngs(passedPathCoordinates);
+                                turf.distance(turf.point([finalLng, finalLat]), turf.point([passedPathCoordinates[passedPathCoordinates.length-1].getLng(), passedPathCoordinates[passedPathCoordinates.length-1].getLat()]), {units: 'meters'}) > 1) {
+                                
+                                passedPathCoordinates.push(new kakao.maps.LatLng(finalLat, finalLng));
+                                passedPolyline.setPath(passedPathCoordinates);
                             }
                         }
                     } catch (e) { console.error("스냅 연산 오류:", e); }
@@ -325,7 +335,12 @@
                 targetLng = finalLng;
 
                 if (prevFinalLat !== null && prevFinalLng !== null) {
-                    const distMoved = map.distance([prevFinalLat, prevFinalLng], [finalLat, finalLng]);
+                    const distMoved = turf.distance(
+                        turf.point([prevFinalLng, prevFinalLat]), 
+                        turf.point([finalLng, finalLat]), 
+                        {units: 'meters'}
+                    );
+                    
                     if (distMoved > 1.0) { 
                         let bearing = turf.bearing(
                             turf.point([prevFinalLng, prevFinalLat]),
@@ -342,24 +357,24 @@
 
                 const arrowHeading = movementBearing !== null ? movementBearing : (lastHeading || 0);
 
-                const arrowIcon = L.divIcon({
-                    className: 'custom-arrow',
-                    html: getArrowHTML(arrowHeading),
-                    iconSize: [32, 32],
-                    iconAnchor: [16, 16] 
-                });
-
                 if (!userMarker) {
                     currentDisplayLat = targetLat;
                     currentDisplayLng = targetLng;
-                    userMarker = L.marker([targetLat, targetLng], { icon: arrowIcon }).addTo(map);
+                    
+                    userMarker = new kakao.maps.CustomOverlay({
+                        position: new kakao.maps.LatLng(targetLat, targetLng),
+                        content: getArrowHTML(arrowHeading),
+                        xAnchor: 0.5,
+                        yAnchor: 0.5
+                    });
+                    userMarker.setMap(map);
                     requestAnimationFrame(smoothAnimate);
                 } else {
-                    userMarker.setIcon(arrowIcon); 
+                    userMarker.setContent(getArrowHTML(arrowHeading)); 
                 }
 
                 if (isAutoFollowing) {
-                    map.panTo([targetLat, targetLng], { animate: true, duration: 1.0, easeLinearity: 1 });
+                    map.panTo(new kakao.maps.LatLng(targetLat, targetLng));
                 }
 
             }, (err) => {
