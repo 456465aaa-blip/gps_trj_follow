@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <title>Ultimate Kakao Tracker (Stable)</title>
+    <title>Ultimate Kakao Tracker (Speed-Adaptive Snap)</title>
     <script type="text/javascript" src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=34bd25e1ff5410300affbf08cb002b43"></script>
     <script src="https://unpkg.com/@turf/turf/turf.min.js"></script>
     <style>
@@ -71,6 +71,7 @@
         const speedPanel = document.getElementById('speed-panel');
         const locateBtn = document.getElementById('locate-btn');
 
+        // 줌 레벨에 따른 선 두께 조절
         function getDynamicWeight() {
             const level = map.getLevel();
             if (level <= 1) return 16;
@@ -94,6 +95,7 @@
             locateBtn.innerText = "📍 수동 탐색 모드";
         });
 
+        // 아이폰 방향 권한 및 현재 위치 고정 버튼
         locateBtn.addEventListener('click', function() {
             if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
                 DeviceOrientationEvent.requestPermission().then(response => {
@@ -111,6 +113,7 @@
             }
         });
 
+        // 파일 업로드 처리 (원본 그대로 렌더링)
         document.getElementById('geojson-input').addEventListener('change', function(e) {
             const file = e.target.files[0];
             if (!file) return;
@@ -120,7 +123,6 @@
                     const data = JSON.parse(e.target.result);
                     if (baseRouteLayer) baseRouteLayer.setMap(null);
                     if (passedPolyline) passedPolyline.setMap(null);
-                    // 억지 보정 없이 원본 데이터를 바로 그립니다!
                     processGeoJSON(data);
                 } catch (err) { 
                     alert('GeoJSON 파싱 오류가 발생했습니다.'); 
@@ -129,6 +131,7 @@
             reader.readAsText(file);
         });
 
+        // GeoJSON 렌더링 함수
         function processGeoJSON(data) {
             currentRouteGeoJSON = data;
             passedPathCoordinates = []; 
@@ -152,11 +155,13 @@
 
             const initialWeight = getDynamicWeight();
             
+            // 붉은색 원본 경로 생성
             baseRouteLayer = new kakao.maps.Polyline({
                 path: kakaoPaths, strokeWeight: initialWeight, strokeColor: '#FF3B30', strokeOpacity: 1.0, strokeStyle: 'solid'
             });
             baseRouteLayer.setMap(map);
             
+            // 회색 지나간 경로 생성
             passedPolyline = new kakao.maps.Polyline({
                 path: [], strokeWeight: initialWeight, strokeColor: '#8E8E93', strokeOpacity: 1.0, strokeStyle: 'solid'
             });
@@ -165,6 +170,7 @@
             map.setBounds(bounds);
         }
 
+        // 나침반 방향 처리 함수
         function handleOrientation(event) {
             let heading = event.webkitCompassHeading || (360 - event.alpha);
             if (heading && userMarker && movementBearing === null) {
@@ -173,6 +179,13 @@
         }
         window.addEventListener('deviceorientationabsolute', handleOrientation, true);
 
+        function getSegmentHeadingDiff(heading1, heading2) {
+            let diff = Math.abs(heading1 - heading2) % 360;
+            if (diff > 180) diff = 360 - diff;
+            return diff;
+        }
+
+        // 화살표 UI 생성 함수
         function getArrowHTML(heading) {
             return `
                 <div class="arrow-container" style="width: 32px; height: 32px; transform: rotate(${heading || 0}deg); transform-origin: center center;">
@@ -182,6 +195,7 @@
                 </div>`;
         }
 
+        // 60fps 부드러운 애니메이션
         function smoothAnimate() {
             if (targetLat !== null && userMarker) {
                 if (currentDisplayLat === null) { currentDisplayLat = targetLat; currentDisplayLng = targetLng; }
@@ -192,6 +206,7 @@
             requestAnimationFrame(smoothAnimate);
         }
 
+        // 실시간 추적 메인 로직
         function startTracking() {
             if (!navigator.geolocation) return;
             
@@ -203,30 +218,58 @@
                 gpsDot.className = accuracy < 15 ? "status-good" : (accuracy < 40 ? "status-normal" : "status-bad");
                 gpsText.innerText = `GPS ${accuracy < 15 ? '양호' : (accuracy < 40 ? '보통' : '불량')} (${accuracy.toFixed(1)}m)`;
 
+                // 1.8km/h 이상일 때만 방향각 업데이트
                 if (heading !== null && !isNaN(heading) && speed > 0.5) lastHeading = heading;
 
                 let fLat = lat, fLng = lng;
 
                 if (routeSegments.length > 0) {
                     const userPoint = turf.point([lng, lat]);
-                    const snapThreshold = Math.min(20, Math.max(15, accuracy * 0.8));
-                    let minDWithout = Infinity, minDWith = Infinity, bestSWithout = null, bestS = null;
+                    
+                    // 💡 [핵심] 속도에 비례하는 다이내믹 스냅 반경 계산
+                    let currentSpeed = speed || 0;
+                    let baseThreshold = 15; // 기본 (골목길/저속)
+
+                    if (currentSpeed > 8.3) { 
+                        baseThreshold = 35; // 30km/h 이상 (대형 도로)
+                    } else if (currentSpeed > 4.1) { 
+                        baseThreshold = 25; // 15~30km/h (중형 도로)
+                    } else { 
+                        baseThreshold = 15; // 15km/h 이하 (골목길 방지)
+                    }
+
+                    // GPS 오차를 반영하되, 최대 40m 상한선 적용
+                    const snapThreshold = Math.min(40, Math.max(baseThreshold, accuracy * 0.8));
+                    
+                    let minDWithout = Infinity, minDWith = Infinity;
+                    let bestSWithout = null, bestS = null;
 
                     for (const s of routeSegments) {
                         let d = turf.pointToLineDistance(userPoint, s, {units: 'meters'});
                         
                         if (d <= snapThreshold) {
-                            if (lastSelectedSegmentId !== null && s.segmentId !== lastSelectedSegmentId) d += 10;
+                            // Sticky Snap (교차로 튐 방지 페널티 20m)
+                            let penaltyDist = d;
+                            if (lastSelectedSegmentId !== null && s.segmentId !== lastSelectedSegmentId) {
+                                penaltyDist += 20; 
+                            }
                             
-                            if (d < minDWithout) { minDWithout = d; bestSWithout = s; }
+                            if (penaltyDist < minDWithout) { 
+                                minDWithout = penaltyDist; 
+                                bestSWithout = s; 
+                            }
 
+                            // 상하행 일치 판단
                             if (lastHeading !== null) {
                                 const p1 = s.geometry.coordinates[0], p2 = s.geometry.coordinates[1];
                                 const sB = turf.bearing(p1, p2);
                                 const sH = sB < 0 ? sB + 360 : sB;
                                 const hD = getSegmentHeadingDiff(lastHeading, sH);
                                 
-                                if (hD <= 90 && d < minDWith) { minDWith = d; bestS = s; }
+                                if (hD <= 90 && penaltyDist < minDWith) { 
+                                    minDWith = penaltyDist; 
+                                    bestS = s; 
+                                }
                             }
                         }
                     }
@@ -235,8 +278,10 @@
                     if (targetSegment) {
                         lastSelectedSegmentId = targetSegment.segmentId;
                         const snapped = turf.nearestPointOnLine(targetSegment, userPoint);
-                        fLat = snapped.geometry.coordinates[1]; fLng = snapped.geometry.coordinates[0];
+                        fLat = snapped.geometry.coordinates[1]; 
+                        fLng = snapped.geometry.coordinates[0];
                         
+                        // 회색 칠하기 덧씌움
                         if (passedPathCoordinates.length === 0 || 
                             turf.distance(turf.point([fLng, fLat]), turf.point([passedPathCoordinates[passedPathCoordinates.length-1].getLng(), passedPathCoordinates[passedPathCoordinates.length-1].getLat()]), {units: 'meters'}) > 1) {
                             passedPathCoordinates.push(new kakao.maps.LatLng(fLat, fLng));
@@ -247,6 +292,7 @@
 
                 targetLat = fLat; targetLng = fLng;
 
+                // 이동 궤적을 통한 실제 방향(Bearing) 계산
                 if (prevFinalLat) {
                     const dm = turf.distance(turf.point([prevFinalLng, prevFinalLat]), turf.point([fLng, fLat]), {units: 'meters'});
                     if (dm > 1) {
@@ -257,11 +303,13 @@
 
                 const aH = movementBearing !== null ? movementBearing : (lastHeading || 0);
 
+                // 마커 오버레이 업데이트
                 if (!userMarker) {
                     userMarker = new kakao.maps.CustomOverlay({ position: new kakao.maps.LatLng(fLat, fLng), content: getArrowHTML(aH), xAnchor: 0.5, yAnchor: 0.5 });
                     userMarker.setMap(map); smoothAnimate();
                 } else { userMarker.setContent(getArrowHTML(aH)); }
                 
+                // 카메라 자동 추적
                 if (isAutoFollowing) map.panTo(new kakao.maps.LatLng(fLat, fLng));
 
             }, null, { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 });
