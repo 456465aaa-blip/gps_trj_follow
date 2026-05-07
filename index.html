@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <title>Ultimate Kakao Tracker (Auto-Save & Smooth)</title>
+    <title>Ultimate Kakao Tracker (Auto-Return & Smooth)</title>
     <script type="text/javascript" src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=34bd25e1ff5410300affbf08cb002b43"></script>
     <script src="https://unpkg.com/@turf/turf/turf.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/togeojson/0.16.0/togeojson.min.js"></script>
@@ -30,6 +30,7 @@
             padding: 16px 24px; font-size: 16px; font-weight: 800; color: #4285F4;
             cursor: pointer; box-shadow: 0 6px 20px rgba(0,0,0,0.25);
             display: flex; align-items: center; gap: 8px;
+            transition: all 0.3s ease;
         }
         .active-follow { background: #4285F4 !important; color: white !important; }
 
@@ -71,6 +72,8 @@
         let passedPathCoordinates = [];  
         
         let isAutoFollowing = true; 
+        let autoReturnTimer = null; // 💡 [신규] 5초 복귀 타이머 변수
+
         let lastHeading = null; 
         let targetLat = null, targetLng = null;
         let currentDisplayLat = null, currentDisplayLng = null;
@@ -92,7 +95,6 @@
         const locateBtn = document.getElementById('locate-btn');
         const offRouteWarning = document.getElementById('off-route-warning');
 
-        // 💡 [신규] 로컬 스토리지에 작업 기록 저장하기 (3초마다 실행됨)
         function saveToLocalStorage() {
             if (!currentRouteGeoJSON) return; 
             try {
@@ -107,7 +109,6 @@
             } catch(e) { console.warn('로컬 스토리지 저장 실패'); }
         }
 
-        // 💡 [신규] 로컬 스토리지에서 작업 기록 불러오기 (페이지 로드 시 1회 실행)
         function loadFromLocalStorage() {
             try {
                 const savedRoute = localStorage.getItem('savedRoute');
@@ -160,11 +161,39 @@
             if (passedPolyline) passedPolyline.setOptions({ strokeWeight: w });
         }
 
-        kakao.maps.event.addListener(map, 'zoom_changed', updateLineWeight);
+        // 💡 [신규] 5초 자동 복귀 타이머 실행 함수
+        function startAutoReturnTimer() {
+            if (autoReturnTimer) clearTimeout(autoReturnTimer);
+            autoReturnTimer = setTimeout(() => {
+                if (!isAutoFollowing) {
+                    isAutoFollowing = true;
+                    locateBtn.classList.add('active-follow');
+                    locateBtn.innerText = "🎯 실시간 추적 중";
+                    if (targetLat !== null && targetLng !== null) {
+                        // 축척은 유지한 채 카메라만 부드럽게 이동
+                        map.panTo(new kakao.maps.LatLng(targetLat, targetLng));
+                    }
+                }
+            }, 5000); // 5초 대기
+        }
+
+        kakao.maps.event.addListener(map, 'zoom_changed', () => {
+            updateLineWeight();
+            // 줌 변경 후에도 손을 떼면 5초 뒤 복귀
+            if (!isAutoFollowing) startAutoReturnTimer(); 
+        });
+
+        // 💡 [수정] 드래그 시작 시 타이머 정지 & 수동 모드 돌입
         kakao.maps.event.addListener(map, 'dragstart', () => {
             isAutoFollowing = false;
             locateBtn.classList.remove('active-follow');
-            locateBtn.innerText = "📍 수동 탐색 모드";
+            locateBtn.innerText = "📍 수동 탐색 (5초 후 복귀)";
+            if (autoReturnTimer) clearTimeout(autoReturnTimer);
+        });
+
+        // 💡 [수정] 드래그가 끝나는 순간부터 5초 타이머 시작
+        kakao.maps.event.addListener(map, 'dragend', () => {
+            startAutoReturnTimer();
         });
 
         locateBtn.addEventListener('click', function() {
@@ -176,6 +205,10 @@
                 window.addEventListener('deviceorientationabsolute', handleOrientation, true);
             }
             requestWakeLock();
+            
+            // 💡 [수정] 버튼을 직접 누르면 타이머 취소하고 즉시 복귀
+            if (autoReturnTimer) clearTimeout(autoReturnTimer); 
+            
             isAutoFollowing = true;
             this.classList.add('active-follow');
             this.innerText = "🎯 실시간 추적 중";
@@ -188,7 +221,6 @@
             const ext = file.name.split('.').pop().toLowerCase();
             const reader = new FileReader();
             
-            // 💡 [수정] 새 파일을 올리면 기존 저장 기록은 초기화
             localStorage.removeItem('savedRoute');
             localStorage.removeItem('savedTrajectory');
             
@@ -208,7 +240,7 @@
                         if (baseRouteLayer) baseRouteLayer.setMap(null);
                         if (passedPolyline) passedPolyline.setMap(null);
                         processGeoJSON(geojsonData);
-                        saveToLocalStorage(); // 새 파일 즉시 저장
+                        saveToLocalStorage(); 
                     } else alert('지원하지 않는 형식입니다.');
                 } catch (err) { alert('파일 변환 오류가 발생했습니다.'); }
             };
@@ -230,11 +262,11 @@
                     const latLng = new kakao.maps.LatLng(c[1], c[0]);
                     kakaoPaths.push(latLng); bounds.extend(latLng);
                 });
-            } catch(e) { console.error("데이터 변환 오류", e); }
+            } catch(e) {}
 
             const w = getDynamicWeight();
             baseRouteLayer = new kakao.maps.Polyline({
-                path: kakaoPaths, strokeWeight: w, strokeColor: '#FF3B30', strokeOpacity: 1.0, strokeStyle: 'solid'
+                path: kakaoPaths, strokeWeight: w, strokeColor: '#FF3B30', strokeOpacity: 0.6, strokeStyle: 'solid'
             });
             baseRouteLayer.setMap(map);
             passedPolyline = new kakao.maps.Polyline({
@@ -414,6 +446,7 @@
                     userMarker.setMap(map); smoothAnimate();
                 } else { userMarker.setContent(getArrowHTML(aH)); }
                 
+                // 💡 [축척 유지] isAutoFollowing이 true일 때 카메라만 타겟으로 이동
                 if (isAutoFollowing) map.panTo(new kakao.maps.LatLng(fLat, fLng));
 
             }, (err) => {
@@ -421,6 +454,9 @@
                 gpsText.style.color = "#ff1744";
                 gpsDot.className = "status-bad";
                 speedPanel.innerText = "-.- km/h";
+                
+                // GPS가 끊기면 타이머 정지 및 수동 모드 텍스트 유지
+                if (autoReturnTimer) clearTimeout(autoReturnTimer);
                 locateBtn.classList.remove('active-follow');
                 locateBtn.innerText = "📍 위치 신호 대기중";
                 isAutoFollowing = false;
@@ -428,9 +464,9 @@
         }
 
         window.onload = () => {
-            loadFromLocalStorage(); // 💡 [신규] 로딩 시 복구 팝업 실행
+            loadFromLocalStorage(); 
             startTracking();
-            setInterval(saveToLocalStorage, 3000); // 💡 [신규] 3초마다 자동 저장 엔진 가동
+            setInterval(saveToLocalStorage, 3000); 
         };
     </script>
 </body>
