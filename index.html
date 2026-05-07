@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <title>Ultimate Kakao Tracker (Pro Edition)</title>
+    <title>Ultimate Kakao Tracker (Pin Toggle Fix)</title>
     <script type="text/javascript" src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=34bd25e1ff5410300affbf08cb002b43"></script>
     <script src="https://unpkg.com/@turf/turf/turf.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/togeojson/0.16.0/togeojson.min.js"></script>
@@ -11,7 +11,6 @@
         body { margin: 0; padding: 0; font-family: 'Pretendard', sans-serif; overflow: hidden; background: #f0f0f0; }
         #map { height: 100vh; width: 100vw; z-index: 1; }
         
-        /* 중앙 메인 컨트롤 패널 */
         #controls {
             position: absolute; top: 15px; left: 50%; transform: translateX(-50%);
             z-index: 1000; background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(5px);
@@ -26,15 +25,11 @@
         .status-bad { background: #ff1744 !important; box-shadow: 0 0 10px #ff1744; }
         input[type="file"] { width: 100%; font-size: 12px; color: #666; }
 
-        /* [신규] 진행률 바 UI */
-        #progress-container {
-            margin-top: 10px; width: 100%; text-align: left;
-        }
+        #progress-container { margin-top: 10px; width: 100%; text-align: left; }
         #progress-text { font-size: 12px; font-weight: 700; color: #555; display: flex; justify-content: space-between; margin-bottom: 5px; }
         #progress-bar-bg { width: 100%; height: 8px; background: #eee; border-radius: 4px; overflow: hidden; }
         #progress-bar-fill { width: 0%; height: 100%; background: linear-gradient(90deg, #4285F4, #34C759); transition: width 0.3s; }
         
-        /* [신규] 다중 경로 레이어 컨트롤 UI */
         #layer-control {
             position: absolute; top: 15px; left: 15px; z-index: 1000;
             background: rgba(255, 255, 255, 0.95); padding: 10px; border-radius: 12px;
@@ -45,7 +40,7 @@
         .layer-item { display: flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; color: #555; word-break: break-all; }
         .layer-color-box { width: 12px; height: 12px; border-radius: 3px; }
 
-        /* [신규] 핀 마커 및 핀 버튼 UI */
+        /* [수정] 핀 마커 및 툴팁 UI (Hide & View 방식) */
         #pin-btn {
             position: absolute; bottom: 40px; left: 20px; z-index: 1000;
             background: white; border: none; border-radius: 50px;
@@ -53,15 +48,60 @@
             cursor: pointer; box-shadow: 0 6px 20px rgba(0,0,0,0.25);
             display: flex; align-items: center; justify-content: center; width: 50px; height: 50px;
         }
-        .custom-pin {
-            background: white; border: 2px solid #FF9500; padding: 5px 8px;
-            border-radius: 8px; font-size: 12px; font-weight: 800; color: #333;
-            box-shadow: 0 4px 10px rgba(0,0,0,0.2); white-space: nowrap;
-            position: relative; top: -15px;
+        
+        .pin-container {
+            position: relative;
+            cursor: pointer;
+            /* 앵커 포인트 조절을 위해 약간의 여백 확보 */
+            padding-bottom: 5px; 
         }
-        .custom-pin::after {
+        
+        .pin-icon {
+            width: 28px;
+            height: 28px;
+            background: white;
+            border: 2px solid #FF9500;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            box-shadow: 0 3px 6px rgba(0,0,0,0.3);
+            position: relative;
+            z-index: 2;
+        }
+
+        .pin-tooltip {
+            position: absolute;
+            bottom: 40px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: white;
+            border: 2px solid #FF9500;
+            padding: 8px 12px;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 800;
+            color: #333;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+            white-space: nowrap;
+            z-index: 1;
+            /* 기본적으로 숨김 처리 */
+            opacity: 0;
+            visibility: hidden;
+            transition: all 0.2s ease-in-out;
+        }
+
+        .pin-tooltip::after {
             content: ''; position: absolute; bottom: -6px; left: 50%; transform: translateX(-50%);
             border-width: 6px 5px 0; border-style: solid; border-color: #FF9500 transparent transparent transparent;
+        }
+
+        /* 핀 아이콘 클릭 시 추가되는 클래스 */
+        .pin-tooltip.show {
+            opacity: 1;
+            visibility: visible;
+            bottom: 45px; /* 살짝 위로 올라오며 나타나는 애니메이션 효과 */
         }
 
         #locate-btn {
@@ -117,9 +157,8 @@
         const options = { center: new kakao.maps.LatLng(37.5665, 126.9780), level: 3 };
         const map = new kakao.maps.Map(container, options);
 
-        // 💡 [신규] 다중 경로 및 핀 저장용 변수
-        let loadedRoutes = []; // 여러 경로를 담을 배열
-        let savedPins = [];    // 마킹된 핀을 담을 배열
+        let loadedRoutes = []; 
+        let savedPins = [];    
         const routeColors = ['#FF3B30', '#007AFF', '#34C759', '#FF9500', '#AF52DE']; 
         
         let passedPolyline = null;       
@@ -158,12 +197,8 @@
         const progressEta = document.getElementById('progress-eta');
         const progressBarFill = document.getElementById('progress-bar-fill');
 
-        // ==========================================
-        // 💾 로컬 스토리지 자동 저장 로직
-        // ==========================================
         function saveToLocalStorage() {
             try {
-                // 카카오 객체를 제외한 순수 데이터만 저장
                 const routesToSave = loadedRoutes.map(r => ({ id: r.id, name: r.name, color: r.color, visible: r.visible, data: r.data }));
                 localStorage.setItem('savedMultiRoutes', JSON.stringify(routesToSave));
                 
@@ -172,7 +207,7 @@
                     localStorage.setItem('savedTrajectory', JSON.stringify(pathArray));
                 }
                 localStorage.setItem('savedPins', JSON.stringify(savedPins.map(p => ({ lat: p.lat, lng: p.lng, memo: p.memo }))));
-            } catch(e) { console.warn('저장 실패 (용량 부족 등)'); }
+            } catch(e) {}
         }
 
         function loadFromLocalStorage() {
@@ -202,11 +237,11 @@
                         localStorage.clear();
                     }
                 }
-            } catch(e) { console.warn('불러오기 실패'); }
+            } catch(e) {}
         }
 
         // ==========================================
-        // 📌 3. 현장 이슈 마킹 (핀 꽂기) 로직
+        // 📌 [수정] 현장 이슈 마킹 (Hide & View 토글 방식 적용)
         // ==========================================
         document.getElementById('pin-btn').addEventListener('click', () => {
             if (targetLat === null || targetLng === null) {
@@ -220,17 +255,36 @@
         });
 
         function createPinOverlay(lat, lng, memo, isNew) {
-            const content = `<div class="custom-pin">📍 ${memo}</div>`;
+            // 커스텀 오버레이에 들어갈 DOM 엘리먼트 직접 생성
+            const container = document.createElement('div');
+            container.className = 'pin-container';
+
+            const icon = document.createElement('div');
+            icon.className = 'pin-icon';
+            icon.innerText = '📍';
+
+            const tooltip = document.createElement('div');
+            tooltip.className = 'pin-tooltip';
+            tooltip.innerText = memo;
+
+            // 아이콘 클릭 시 말풍선 토글 이벤트 추가
+            icon.addEventListener('click', () => {
+                tooltip.classList.toggle('show');
+            });
+
+            container.appendChild(icon);
+            container.appendChild(tooltip);
+
             const customOverlay = new kakao.maps.CustomOverlay({
-                position: new kakao.maps.LatLng(lat, lng), content: content, yAnchor: 1
+                position: new kakao.maps.LatLng(lat, lng), 
+                content: container, 
+                yAnchor: 1 // 핀의 아래쪽 뾰족한 부분이 좌표에 일치하도록 설정
             });
             customOverlay.setMap(map);
+            
             if (isNew) savedPins.push({ lat, lng, memo });
         }
 
-        // ==========================================
-        // 🗺️ 6. 다중 경로 로드 및 레이어 관리 로직
-        // ==========================================
         document.getElementById('geojson-input').addEventListener('change', function(e) {
             const files = e.target.files;
             if (files.length === 0) return;
@@ -327,9 +381,6 @@
             passedPolyline.setMap(map);
         }
 
-        // ==========================================
-        // 📈 5. 작업 진행률 및 ETA 로직
-        // ==========================================
         function updateTotalRouteLength() {
             totalRouteLengthMeters = loadedRoutes.filter(r => r.visible).reduce((sum, r) => sum + r.length, 0);
             updateProgressUI();
@@ -368,9 +419,6 @@
             }
         }
 
-        // ==========================================
-        // 엔진 및 화면 최적화 (기존 로직 유지)
-        // ==========================================
         async function requestWakeLock() { if ('wakeLock' in navigator) try { wakeLock = await navigator.wakeLock.request('screen'); } catch (err) {} }
         document.addEventListener('visibilitychange', async () => { if (wakeLock !== null && document.visibilityState === 'visible') requestWakeLock(); });
 
@@ -441,9 +489,6 @@
             requestAnimationFrame(smoothAnimate);
         }
 
-        // ==========================================
-        // 🚀 코어 트래킹 엔진
-        // ==========================================
         function startTracking() {
             if (!navigator.geolocation) return;
             requestWakeLock(); 
@@ -454,7 +499,7 @@
                 speedPanel.innerText = `${kmh} km/h`;
                 
                 currentSpeedMs = speed || 0; lastGpsTime = Date.now();
-                updateProgressUI(); // 속도가 바뀌면 ETA도 갱신
+                updateProgressUI(); 
                 
                 gpsDot.className = accuracy < 15 ? "status-good" : (accuracy < 40 ? "status-normal" : "status-bad");
                 gpsText.innerText = `GPS ${accuracy < 15 ? '양호' : (accuracy < 40 ? '보통' : '불량')} (${accuracy.toFixed(1)}m)`;
@@ -465,7 +510,6 @@
                 let fLat = rawLat, fLng = rawLng;
                 const now = Date.now();
 
-                // 스무딩 로직
                 if (lastValidPos && lastValidTime) {
                     const dt = (now - lastValidTime) / 1000;
                     if (dt > 0) {
@@ -479,7 +523,6 @@
                 }
                 lastValidPos = { lat: fLat, lng: fLng }; lastValidTime = now;
 
-                // 💡 [수정] 스냅 판정을 '보이는 모든 레이어의 선분'을 대상으로 검사
                 const activeSegments = loadedRoutes.filter(r => r.visible).flatMap(r => r.segments);
                 if (activeSegments.length > 0) {
                     const userPoint = turf.point([fLng, fLat]); 
@@ -513,7 +556,6 @@
                     }
                 }
 
-                // 궤적 기록 및 진행률 길이 누적
                 if (passedPathCoordinates.length === 0) {
                     passedPathCoordinates.push(new kakao.maps.LatLng(fLat, fLng));
                     if(passedPolyline) passedPolyline.setPath(passedPathCoordinates);
@@ -528,7 +570,7 @@
                         if(passedPolyline) passedPolyline.setPath(passedPathCoordinates);
                         lastPathTime = now; 
                         
-                        totalPassedLengthMeters += distFromLast; // 진행률 갱신
+                        totalPassedLengthMeters += distFromLast; 
                         updateProgressUI();
                     }
                 }
