@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <title>Ultimate Kakao Tracker (Dynamic Pin & Progress)</title>
+    <title>Ultimate Kakao Tracker (Smart Auto-Return)</title>
     <script type="text/javascript" src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=34bd25e1ff5410300affbf08cb002b43"></script>
     <script src="https://unpkg.com/@turf/turf/turf.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/togeojson/0.16.0/togeojson.min.js"></script>
@@ -25,7 +25,6 @@
         .status-bad { background: #ff1744 !important; box-shadow: 0 0 10px #ff1744; }
         input[type="file"] { width: 100%; font-size: 12px; color: #666; }
 
-        /* [수정] 진행률 바 UI (ETA 제거 및 중앙 정렬) */
         #progress-container { margin-top: 10px; width: 100%; text-align: center; }
         #progress-text { font-size: 13px; font-weight: 800; color: #333; margin-bottom: 6px; }
         #progress-bar-bg { width: 100%; height: 8px; background: #eee; border-radius: 4px; overflow: hidden; }
@@ -41,7 +40,6 @@
         .layer-item { display: flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; color: #555; word-break: break-all; }
         .layer-color-box { width: 12px; height: 12px; border-radius: 3px; }
 
-        /* [수정] 다이내믹 핀 마커 및 툴팁 UI */
         #pin-btn {
             position: absolute; bottom: 40px; left: 20px; z-index: 1000;
             background: white; border: none; border-radius: 50px;
@@ -51,52 +49,22 @@
         }
         
         .pin-container {
-            position: relative;
-            cursor: pointer;
-            padding-bottom: 5px;
-            /* 💡 스케일링을 위해 기준점을 하단 중앙으로 고정 */
-            transform-origin: bottom center; 
-            transition: transform 0.2s ease;
+            position: relative; cursor: pointer; padding-bottom: 5px;
+            transform-origin: bottom center; transition: transform 0.2s ease;
         }
         
         .pin-icon {
-            width: 28px;
-            height: 28px;
-            background: white;
-            border: 2px solid #FF9500;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 14px;
-            box-shadow: 0 3px 6px rgba(0,0,0,0.3);
-            position: relative;
-            z-index: 2;
+            width: 28px; height: 28px; background: white; border: 2px solid #FF9500; border-radius: 50%;
+            display: flex; align-items: center; justify-content: center; font-size: 14px;
+            box-shadow: 0 3px 6px rgba(0,0,0,0.3); position: relative; z-index: 2;
         }
 
         .pin-tooltip {
-            position: absolute;
-            bottom: 40px;
-            left: 50%;
-            transform: translateX(-50%);
-            background: white;
-            border: 2px solid #FF9500;
-            padding: 8px 12px;
-            border-radius: 8px;
-            font-size: 13px;
-            font-weight: 800;
-            color: #333;
-            box-shadow: 0 4px 10px rgba(0,0,0,0.2);
-            /* 💡 텍스트가 길어지면 자동으로 줄바꿈 되도록 가변 사이즈 설정 */
-            white-space: pre-wrap; 
-            word-break: keep-all;
-            max-width: 200px;
-            width: max-content;
-            text-align: center;
-            z-index: 1;
-            opacity: 0;
-            visibility: hidden;
-            transition: all 0.2s ease-in-out;
+            position: absolute; bottom: 40px; left: 50%; transform: translateX(-50%);
+            background: white; border: 2px solid #FF9500; padding: 8px 12px; border-radius: 8px;
+            font-size: 13px; font-weight: 800; color: #333; box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+            white-space: pre-wrap; word-break: keep-all; max-width: 200px; width: max-content;
+            text-align: center; z-index: 1; opacity: 0; visibility: hidden; transition: all 0.2s ease-in-out;
         }
 
         .pin-tooltip::after {
@@ -104,11 +72,7 @@
             border-width: 6px 5px 0; border-style: solid; border-color: #FF9500 transparent transparent transparent;
         }
 
-        .pin-tooltip.show {
-            opacity: 1;
-            visibility: visible;
-            bottom: 45px; 
-        }
+        .pin-tooltip.show { opacity: 1; visibility: visible; bottom: 45px; }
 
         #locate-btn {
             position: absolute; bottom: 40px; right: 20px; z-index: 1000;
@@ -174,7 +138,7 @@
         let totalPassedLengthMeters = 0;
         
         let isAutoFollowing = true; 
-        let autoReturnTimer = null;
+        let lastMapInteractionTime = 0; // 💡 [신규] 지도를 마지막으로 만진 시간 기록
 
         let lastHeading = null; 
         let targetLat = null, targetLng = null;
@@ -282,8 +246,7 @@
             customOverlay.setMap(map);
             
             if (isNew) savedPins.push({ lat, lng, memo });
-            
-            updatePinScale(); // 핀 생성 직후 현재 줌 레벨에 맞춰 사이즈 조절
+            updatePinScale(); 
         }
 
         document.getElementById('geojson-input').addEventListener('change', function(e) {
@@ -401,10 +364,8 @@
                 progressPercent.innerText = "경로 대기중 (진행률 0%)";
                 progressBarFill.style.width = "0%"; return;
             }
-            
             let percent = (totalPassedLengthMeters / totalRouteLengthMeters) * 100;
             if (percent > 100) percent = 100;
-            
             progressPercent.innerText = `현재 진행률 ${percent.toFixed(1)}%`;
             progressBarFill.style.width = `${percent}%`;
         }
@@ -423,53 +384,41 @@
             if (passedPolyline) passedPolyline.setOptions({ strokeWeight: w });
         }
 
-        // 💡 [신규] 지도를 축소/확대할 때마다 핀 사이즈를 동적으로 조절하는 함수
         function updatePinScale() {
             const level = map.getLevel();
             let scale = 1;
-            
-            // 줌 레벨에 따른 스케일링 설정
             if (level <= 1) scale = 1.2;
             else if (level === 2) scale = 1.0;
             else if (level === 3) scale = 0.85;
             else if (level === 4) scale = 0.7;
-            else scale = 0.55; // 지도를 넓게 볼 때는 작게 줄임
+            else scale = 0.55; 
 
             const pins = document.querySelectorAll('.pin-container');
-            pins.forEach(pin => {
-                pin.style.transform = `scale(${scale})`;
-            });
+            pins.forEach(pin => { pin.style.transform = `scale(${scale})`; });
         }
 
-        function startAutoReturnTimer() {
-            if (autoReturnTimer) clearTimeout(autoReturnTimer);
-            autoReturnTimer = setTimeout(() => {
-                if (!isAutoFollowing) {
-                    isAutoFollowing = true; locateBtn.classList.add('active-follow'); locateBtn.innerText = "🎯 실시간 추적 중";
-                    if (targetLat !== null && targetLng !== null) map.panTo(new kakao.maps.LatLng(targetLat, targetLng));
-                }
-            }, 5000); 
-        }
-
-        // 💡 [수정] 줌 변경 이벤트에 핀 스케일링 로직 추가
+        // 💡 [수정] 지도 조작 시 현재 시간만 갱신 (기존의 단순 5초 타이머 제거)
         kakao.maps.event.addListener(map, 'zoom_changed', () => { 
             updateLineWeight(); 
-            updatePinScale(); // 핀 크기 동기화
-            if (!isAutoFollowing) startAutoReturnTimer(); 
+            updatePinScale(); 
+            if (!isAutoFollowing) lastMapInteractionTime = Date.now(); 
         });
         
         kakao.maps.event.addListener(map, 'dragstart', () => {
-            isAutoFollowing = false; locateBtn.classList.remove('active-follow'); locateBtn.innerText = "📍 수동 탐색 (5초 후 복귀)";
-            if (autoReturnTimer) clearTimeout(autoReturnTimer);
+            isAutoFollowing = false; locateBtn.classList.remove('active-follow'); 
+            // 안내 문구 변경
+            locateBtn.innerText = "📍 수동 (주행 시 자동복귀)";
+            lastMapInteractionTime = Date.now();
         });
-        kakao.maps.event.addListener(map, 'dragend', () => startAutoReturnTimer());
+        kakao.maps.event.addListener(map, 'dragend', () => { lastMapInteractionTime = Date.now(); });
 
         locateBtn.addEventListener('click', function() {
             if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
                 DeviceOrientationEvent.requestPermission().then(res => { if (res === 'granted') window.addEventListener('deviceorientation', handleOrientation); });
             } else window.addEventListener('deviceorientationabsolute', handleOrientation, true);
             requestWakeLock();
-            if (autoReturnTimer) clearTimeout(autoReturnTimer); 
+            
+            lastMapInteractionTime = 0; // 초기화
             isAutoFollowing = true; this.classList.add('active-follow'); this.innerText = "🎯 실시간 추적 중";
             if (targetLat !== null && targetLng !== null) map.panTo(new kakao.maps.LatLng(targetLat, targetLng));
         });
@@ -509,8 +458,8 @@
             
             navigator.geolocation.watchPosition((pos) => {
                 const { latitude: rawLat, longitude: rawLng, speed, accuracy, heading } = pos.coords;
-                const kmh = ((speed || 0) * 3.6).toFixed(1);
-                speedPanel.innerText = `${kmh} km/h`;
+                const currentKmh = (speed || 0) * 3.6; // km/h 환산
+                speedPanel.innerText = `${currentKmh.toFixed(1)} km/h`;
                 
                 currentSpeedMs = speed || 0; lastGpsTime = Date.now();
                 
@@ -604,11 +553,21 @@
                     userMarker.setMap(map); smoothAnimate();
                 } else { userMarker.setContent(getArrowHTML(aH)); }
                 
+                // 💡 [신규] 조작 후 5초 경과 + 속도가 5km/h 이상일 때만 자동 복귀!
+                if (!isAutoFollowing && lastMapInteractionTime > 0) {
+                    if (Date.now() - lastMapInteractionTime > 5000 && currentKmh >= 5.0) {
+                        isAutoFollowing = true;
+                        locateBtn.classList.add('active-follow');
+                        locateBtn.innerText = "🎯 실시간 추적 중";
+                        lastMapInteractionTime = 0; // 초기화
+                    }
+                }
+
                 if (isAutoFollowing) map.panTo(new kakao.maps.LatLng(fLat, fLng));
 
             }, (err) => {
                 gpsText.innerText = "GPS 신호 끊김 (탐색 중)"; gpsText.style.color = "#ff1744"; gpsDot.className = "status-bad"; speedPanel.innerText = "-.- km/h";
-                if (autoReturnTimer) clearTimeout(autoReturnTimer); locateBtn.classList.remove('active-follow'); locateBtn.innerText = "📍 위치 신호 대기중"; isAutoFollowing = false;
+                locateBtn.classList.remove('active-follow'); locateBtn.innerText = "📍 위치 신호 대기중"; isAutoFollowing = false;
             }, { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 });
         }
 
