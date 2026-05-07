@@ -285,7 +285,7 @@
                 });
                 length = turf.length(geojsonData, {units: 'meters'});
             } catch(e) {}
-            const polyline = new kakao.maps.Polyline({ path: kakaoPaths, strokeWeight: getDynamicWeight(), strokeColor: color, strokeOpacity: 0.6, strokeStyle: 'solid' });
+            const polyline = new kakao.maps.Polyline({ path: kakaoPaths, strokeWeight: getDynamicWeight(), strokeColor: color, strokeOpacity: 1.0, strokeStyle: 'solid' });
             if (visible) polyline.setMap(map);
             const routeId = `route_${Date.now()}_${Math.floor(Math.random()*1000)}`;
             loadedRoutes.push({ id: routeId, name, color, visible, data: geojsonData, polyline, segments, length });
