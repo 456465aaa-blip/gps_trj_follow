@@ -234,7 +234,7 @@
 
             const w = getDynamicWeight();
             baseRouteLayer = new kakao.maps.Polyline({
-                path: kakaoPaths, strokeWeight: w, strokeColor: '#FF3B30', strokeOpacity: 0.6, strokeStyle: 'solid'
+                path: kakaoPaths, strokeWeight: w, strokeColor: '#FF3B30', strokeOpacity: 1.0, strokeStyle: 'solid'
             });
             baseRouteLayer.setMap(map);
             passedPolyline = new kakao.maps.Polyline({
