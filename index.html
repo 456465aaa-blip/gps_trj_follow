@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <title>Ultimate Kakao Tracker (Strava-grade & Multi-format)</title>
+    <title>Ultimate Kakao Tracker (Toggle Offset & Strava-grade)</title>
     <script type="text/javascript" src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=34bd25e1ff5410300affbf08cb002b43"></script>
     <script src="https://unpkg.com/@turf/turf/turf.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/togeojson/0.16.0/togeojson.min.js"></script>
@@ -24,14 +24,25 @@
         .status-bad { background: #ff1744 !important; box-shadow: 0 0 10px #ff1744; }
         input[type="file"] { width: 100%; font-size: 12px; color: #666; }
         
+        /* 메인 추적 버튼 */
         #locate-btn {
             position: absolute; bottom: 40px; right: 20px; z-index: 1000;
             background: white; border: none; border-radius: 50px;
             padding: 16px 24px; font-size: 16px; font-weight: 800; color: #4285F4;
             cursor: pointer; box-shadow: 0 6px 20px rgba(0,0,0,0.25);
-            display: flex; align-items: center; gap: 8px;
+            display: flex; align-items: center; gap: 8px; transition: all 0.2s;
         }
         .active-follow { background: #4285F4 !important; color: white !important; }
+
+        /* [신규] 차선 분리 토글 버튼 (추적 버튼 바로 위) */
+        #toggle-offset-btn {
+            position: absolute; bottom: 105px; right: 20px; z-index: 1000;
+            background: white; border: none; border-radius: 50px;
+            padding: 12px 20px; font-size: 14px; font-weight: 800; color: #555;
+            cursor: pointer; box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+            transition: all 0.2s;
+        }
+        .active-offset { background: #FF9500 !important; color: white !important; }
 
         #off-route-warning {
             position: absolute; top: 140px; left: 50%; transform: translateX(-50%);
@@ -40,6 +51,13 @@
             display: none; animation: blink 0.8s infinite alternate; letter-spacing: -0.5px;
         }
         @keyframes blink { from { opacity: 1; } to { opacity: 0.5; } }
+
+        .route-arrow {
+            width: 14px; height: 14px; display: flex; align-items: center; justify-content: center;
+            background: white; border: 1.5px solid #FF3B30; border-radius: 50%;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+        }
+        .route-arrow svg { fill: #FF3B30; width: 8px; height: 8px; }
     </style>
 </head>
 <body>
@@ -55,6 +73,7 @@
 
     <div id="off-route-warning">🚨 경로 이탈 주의!</div>
 
+    <button id="toggle-offset-btn" class="active-offset">🔀 차선 분리 켜짐</button>
     <button id="locate-btn" class="active-follow">🎯 실시간 추적 중</button>
     <div id="map"></div>
 
@@ -69,8 +88,11 @@
         let passedPolyline = null;       
         let userMarker = null;           
         let passedPathCoordinates = [];  
+        let arrowOverlays = []; 
         
         let isAutoFollowing = true; 
+        let isOffsetMode = true; // [신규] 차선 분리 상태 변수
+
         let lastHeading = null; 
         let targetLat = null, targetLng = null;
         let currentDisplayLat = null, currentDisplayLng = null;
@@ -78,22 +100,21 @@
         let prevFinalLat = null, prevFinalLng = null;
         let lastSelectedSegmentId = null;
         
-        // 튐 방지(스무딩)용 변수
         let lastValidPos = null;
         let lastValidTime = 0;
-        
         let wakeLock = null; 
 
         const gpsDot = document.getElementById('gps-dot');
         const gpsText = document.getElementById('gps-text');
         const speedPanel = document.getElementById('speed-panel');
         const locateBtn = document.getElementById('locate-btn');
+        const toggleOffsetBtn = document.getElementById('toggle-offset-btn');
         const offRouteWarning = document.getElementById('off-route-warning');
 
         async function requestWakeLock() {
             if ('wakeLock' in navigator) {
                 try { wakeLock = await navigator.wakeLock.request('screen'); } 
-                catch (err) { console.error('화면 꺼짐 방지 실패:', err.message); }
+                catch (err) { console.error('WakeLock failed:', err.message); }
             }
         }
 
@@ -101,13 +122,30 @@
             if (wakeLock !== null && document.visibilityState === 'visible') requestWakeLock();
         });
 
+        // [신규] 토글 버튼 클릭 이벤트
+        toggleOffsetBtn.addEventListener('click', () => {
+            isOffsetMode = !isOffsetMode; // 상태 반전
+            
+            if (isOffsetMode) {
+                toggleOffsetBtn.classList.add('active-offset');
+                toggleOffsetBtn.innerText = "🔀 차선 분리 켜짐";
+            } else {
+                toggleOffsetBtn.classList.remove('active-offset');
+                toggleOffsetBtn.innerText = "🔀 차선 분리 꺼짐";
+            }
+
+            // 파일이 이미 올라가 있다면, 지나온 궤적은 건드리지 않고 렌더링만 즉시 업데이트
+            if (currentRouteGeoJSON) {
+                renderCurrentRoute();
+            }
+        });
+
         function getDynamicWeight() {
             const level = map.getLevel();
-            if (level <= 1) return 16;
-            if (level === 2) return 12;
-            if (level === 3) return 8;
-            if (level === 4) return 5;
-            return 3;
+            if (level <= 1) return 18;
+            if (level === 2) return 14;
+            if (level === 3) return 10;
+            return 4;
         }
 
         function updateLineWeight() {
@@ -157,42 +195,108 @@
                     }
 
                     if (geojsonData) {
-                        if (baseRouteLayer) baseRouteLayer.setMap(null);
-                        if (passedPolyline) passedPolyline.setMap(null);
                         processGeoJSON(geojsonData);
-                    } else alert('지원하지 않는 형식입니다.');
-                } catch (err) { alert('파일 변환 오류가 발생했습니다.'); }
+                    }
+                } catch (err) { alert('파일 변환 오류'); }
             };
             reader.readAsText(file);
         });
 
+        // 💡 [신규] 파일을 처음 올렸을 때의 초기화 함수
         function processGeoJSON(data) {
             currentRouteGeoJSON = data;
-            passedPathCoordinates = []; routeSegments = [];
-            let kakaoPaths = []; let bounds = new kakao.maps.LatLngBounds();
+            passedPathCoordinates = []; 
+            if (passedPolyline) passedPolyline.setPath([]);
+
+            let bounds = new kakao.maps.LatLngBounds();
+            turf.coordEach(data, (c) => bounds.extend(new kakao.maps.LatLng(c[1], c[0])));
+            map.setBounds(bounds);
+
+            // 초기 렌더링용 회색선 그릇 생성
+            if (!passedPolyline) {
+                passedPolyline = new kakao.maps.Polyline({
+                    path: [], strokeWeight: getDynamicWeight(), strokeColor: '#8E8E93', strokeOpacity: 1.0, strokeStyle: 'solid'
+                });
+                passedPolyline.setMap(map);
+            }
+
+            renderCurrentRoute(); // 실제 그리기 함수 호출
+        }
+
+        // 💡 [신규] 토글 버튼을 누르거나 렌더링할 때 실행되는 핵심 함수
+        function renderCurrentRoute() {
+            if (!currentRouteGeoJSON) return;
+
+            // 기존에 그려진 빨간 선과 화살표만 지우기 (회색 기록은 살림)
+            if (baseRouteLayer) baseRouteLayer.setMap(null);
+            arrowOverlays.forEach(ao => ao.setMap(null));
+            arrowOverlays = [];
+
+            // 상태에 따라 데이터 세팅
+            let renderGeoJSON = currentRouteGeoJSON;
+            if (isOffsetMode) {
+                try {
+                    renderGeoJSON = turf.lineOffset(currentRouteGeoJSON, 5, {units: 'meters'});
+                } catch(e) { console.error("Offset 에러", e); }
+            }
+
+            routeSegments = [];
+            let kakaoPaths = []; 
+            let segmentId = 0;
 
             try {
-                let segmentId = 0;
-                turf.segmentEach(data, (currentSegment) => {
+                // 스냅을 위해 현재 그려질 선의 세그먼트 생성
+                turf.segmentEach(renderGeoJSON, (currentSegment) => {
                     currentSegment.segmentId = segmentId++;
                     routeSegments.push(currentSegment);
                 });
-                turf.coordEach(data, (c) => {
-                    const latLng = new kakao.maps.LatLng(c[1], c[0]);
-                    kakaoPaths.push(latLng); bounds.extend(latLng);
+                
+                turf.coordEach(renderGeoJSON, (c) => {
+                    kakaoPaths.push(new kakao.maps.LatLng(c[1], c[0]));
                 });
-            } catch(e) { console.error("데이터 변환 오류", e); }
+
+                // 분리 모드일 때만 화살표 아이콘 생성
+                if (isOffsetMode) {
+                    createDirectionArrows(renderGeoJSON);
+                }
+            } catch(e) { console.error("데이터 렌더링 오류", e); }
 
             const w = getDynamicWeight();
+            
+            // 투명도 조절: 원본 겹침 모드일 땐 더 진하게, 분리 모드일 땐 살짝 투명하게
+            const opacity = isOffsetMode ? 0.5 : 0.8;
+
             baseRouteLayer = new kakao.maps.Polyline({
-                path: kakaoPaths, strokeWeight: w, strokeColor: '#FF3B30', strokeOpacity: 0.6, strokeStyle: 'solid'
+                path: kakaoPaths, strokeWeight: w, strokeColor: '#FF3B30', strokeOpacity: opacity, strokeStyle: 'solid'
             });
             baseRouteLayer.setMap(map);
-            passedPolyline = new kakao.maps.Polyline({
-                path: [], strokeWeight: w, strokeColor: '#8E8E93', strokeOpacity: 1.0, strokeStyle: 'solid'
-            });
-            passedPolyline.setMap(map);
-            map.setBounds(bounds);
+        }
+
+        function createDirectionArrows(geojson) {
+            try {
+                const line = turf.flatten(geojson).features[0];
+                const length = turf.length(line, {units: 'meters'});
+                const step = 100; 
+
+                for (let dist = step; dist < length; dist += step) {
+                    const start = turf.along(line, dist, {units: 'meters'});
+                    const next = turf.along(line, dist + 1, {units: 'meters'});
+                    const bearing = turf.bearing(start, next);
+                    
+                    const content = `
+                        <div class="route-arrow" style="transform: rotate(${bearing}deg);">
+                            <svg viewBox="0 0 24 24"><path d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6-1.41-1.41z"/></svg>
+                        </div>`;
+
+                    const overlay = new kakao.maps.CustomOverlay({
+                        position: new kakao.maps.LatLng(start.geometry.coordinates[1], start.geometry.coordinates[0]),
+                        content: content,
+                        yAnchor: 0.5
+                    });
+                    overlay.setMap(map);
+                    arrowOverlays.push(overlay);
+                }
+            } catch(e) {}
         }
 
         function handleOrientation(event) {
@@ -234,27 +338,23 @@
                 speedPanel.innerText = `${kmh} km/h`;
                 
                 gpsDot.className = accuracy < 15 ? "status-good" : (accuracy < 40 ? "status-normal" : "status-bad");
-                gpsText.innerText = `GPS ${accuracy < 15 ? '양호' : (accuracy < 40 ? '보통' : '불량')} (${accuracy.toFixed(1)}m)`;
-                gpsText.style.color = accuracy < 15 ? "#00c853" : (accuracy < 40 ? "#ffab00" : "#ff1744");
+                gpsText.innerText = `GPS ${accuracy < 15 ? '양호' : '보통'} (${accuracy.toFixed(1)}m)`;
 
                 if (heading !== null && !isNaN(heading) && speed > 0.5) lastHeading = heading;
 
                 let fLat = rawLat, fLng = rawLng;
                 const now = Date.now();
 
-                // 💡 스트라바급 스무딩 (Kalman Filter Lite)
                 if (lastValidPos && lastValidTime) {
                     const dt = (now - lastValidTime) / 1000;
                     if (dt > 0) {
                         const distJump = turf.distance(turf.point([lastValidPos.lng, lastValidPos.lat]), turf.point([rawLng, rawLat]), {units: 'meters'});
-                        const impliedSpeed = distJump / dt; // m/s
-                        
-                        // 물리적으로 불가능한 속도(초당 25m = 시속 90km 이상)의 갑작스러운 튐 무시
+                        const impliedSpeed = distJump / dt;
                         if (impliedSpeed > 25 && accuracy > 10) {
-                            fLat = lastValidPos.lat * 0.8 + rawLat * 0.2; // 이전 위치를 강하게 유지
+                            fLat = lastValidPos.lat * 0.8 + rawLat * 0.2;
                             fLng = lastValidPos.lng * 0.8 + rawLng * 0.2;
                         } else {
-                            fLat = lastValidPos.lat * 0.2 + rawLat * 0.8; // 정상 움직임 (가벼운 지터링만 제거)
+                            fLat = lastValidPos.lat * 0.2 + rawLat * 0.8;
                             fLng = lastValidPos.lng * 0.2 + rawLng * 0.8;
                         }
                     }
@@ -263,58 +363,37 @@
                 lastValidTime = now;
 
                 if (routeSegments.length > 0) {
-                    const userPoint = turf.point([fLng, fLat]); // 스무딩된 위치를 기준으로 스냅 계산
-                    
+                    const userPoint = turf.point([fLng, fLat]);
                     let currentSpeed = speed || 0;
-                    let baseThreshold = currentSpeed > 8.3 ? 35 : (currentSpeed > 4.1 ? 25 : 15);
-                    const snapThreshold = Math.min(40, Math.max(baseThreshold, accuracy * 0.8));
+                    let baseT = currentSpeed > 8.3 ? 35 : (currentSpeed > 4.1 ? 25 : 15);
+                    const snapThreshold = Math.min(45, Math.max(baseT, accuracy * 0.8));
                     
                     let minDWithout = Infinity, minDWith = Infinity;
                     let bestSWithout = null, bestS = null;
 
                     for (const s of routeSegments) {
                         let d = turf.pointToLineDistance(userPoint, s, {units: 'meters'});
-                        
                         if (d < minDWithout) { minDWithout = d; bestSWithout = s; }
-
                         if (d <= snapThreshold) {
-                            // 💡 환승 페널티 (순서 무시, 다른 선분 갈아탈 때 10m 페널티 부여 -> 평행 도로 튐 방지)
-                            let penaltyDist = d;
-                            if (lastSelectedSegmentId !== null && s.segmentId !== lastSelectedSegmentId) {
-                                penaltyDist += 10; 
-                            }
-
+                            let pDist = d;
+                            if (lastSelectedSegmentId !== null && s.segmentId !== lastSelectedSegmentId) pDist += 10; 
                             if (lastHeading !== null) {
                                 const p1 = s.geometry.coordinates[0], p2 = s.geometry.coordinates[1];
-                                const sB = turf.bearing(p1, p2);
-                                const sH = sB < 0 ? sB + 360 : sB;
-                                const hD = getSegmentHeadingDiff(lastHeading, sH);
-                                
-                                if (hD <= 90 && penaltyDist < minDWith) { 
-                                    minDWith = penaltyDist; 
-                                    bestS = s; 
-                                }
+                                const sB = (turf.bearing(p1, p2) + 360) % 360;
+                                if (getSegmentHeadingDiff(lastHeading, sB) <= 90 && pDist < minDWith) { minDWith = pDist; bestS = s; }
                             }
                         }
                     }
 
-                    if (minDWithout > 40) {
-                        offRouteWarning.style.display = 'block';
-                        lastSelectedSegmentId = null; 
-                    } else {
-                        offRouteWarning.style.display = 'none';
-                    }
+                    if (minDWithout > 50) offRouteWarning.style.display = 'block';
+                    else offRouteWarning.style.display = 'none';
 
                     const targetSegment = bestS || (minDWithout <= snapThreshold ? bestSWithout : null);
-                    
                     if (targetSegment) {
                         lastSelectedSegmentId = targetSegment.segmentId;
                         const snapped = turf.nearestPointOnLine(targetSegment, userPoint);
-                        fLat = snapped.geometry.coordinates[1]; 
-                        fLng = snapped.geometry.coordinates[0];
-                        
-                        if (passedPathCoordinates.length === 0 || 
-                            turf.distance(turf.point([fLng, fLat]), turf.point([passedPathCoordinates[passedPathCoordinates.length-1].getLng(), passedPathCoordinates[passedPathCoordinates.length-1].getLat()]), {units: 'meters'}) > 1) {
+                        fLat = snapped.geometry.coordinates[1]; fLng = snapped.geometry.coordinates[0];
+                        if (passedPathCoordinates.length === 0 || turf.distance(turf.point([fLng, fLat]), turf.point([passedPathCoordinates[passedPathCoordinates.length-1].getLng(), passedPathCoordinates[passedPathCoordinates.length-1].getLat()]), {units: 'meters'}) > 1) {
                             passedPathCoordinates.push(new kakao.maps.LatLng(fLat, fLng));
                             passedPolyline.setPath(passedPathCoordinates);
                         }
@@ -322,32 +401,22 @@
                 }
 
                 targetLat = fLat; targetLng = fLng;
-
                 if (prevFinalLat) {
-                    const dm = turf.distance(turf.point([prevFinalLng, prevFinalLat]), turf.point([fLng, fLat]), {units: 'meters'});
-                    if (dm > 1) {
+                    if (turf.distance(turf.point([prevFinalLng, prevFinalLat]), turf.point([fLng, fLat]), {units: 'meters'}) > 1) {
                         movementBearing = (turf.bearing(turf.point([prevFinalLng, prevFinalLat]), turf.point([fLng, fLat])) + 360) % 360;
                         prevFinalLat = fLat; prevFinalLng = fLng;
                     }
                 } else { prevFinalLat = fLat; prevFinalLng = fLng; }
 
                 const aH = movementBearing !== null ? movementBearing : (lastHeading || 0);
-
                 if (!userMarker) {
                     userMarker = new kakao.maps.CustomOverlay({ position: new kakao.maps.LatLng(fLat, fLng), content: getArrowHTML(aH), xAnchor: 0.5, yAnchor: 0.5 });
                     userMarker.setMap(map); smoothAnimate();
-                } else { userMarker.setContent(getArrowHTML(aH)); }
-                
+                } else userMarker.setContent(getArrowHTML(aH));
                 if (isAutoFollowing) map.panTo(new kakao.maps.LatLng(fLat, fLng));
 
             }, (err) => {
-                gpsText.innerText = "GPS 신호 끊김 (탐색 중)";
-                gpsText.style.color = "#ff1744";
-                gpsDot.className = "status-bad";
-                speedPanel.innerText = "-.- km/h";
-                locateBtn.classList.remove('active-follow');
-                locateBtn.innerText = "📍 위치 신호 대기중";
-                isAutoFollowing = false;
+                gpsText.innerText = "GPS 신호 대기중"; speedPanel.innerText = "-.- km/h";
             }, { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 });
         }
 
