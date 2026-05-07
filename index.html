@@ -3,9 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <title>Ultimate Kakao Tracker (Final)</title>
+    <title>GPS Tracker (Multi-Format)</title>
     <script type="text/javascript" src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=34bd25e1ff5410300affbf08cb002b43"></script>
     <script src="https://unpkg.com/@turf/turf/turf.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/togeojson/0.16.0/togeojson.min.js"></script>
     <style>
         body { margin: 0; padding: 0; font-family: 'Pretendard', sans-serif; overflow: hidden; background: #f0f0f0; }
         #map { height: 100vh; width: 100vw; z-index: 1; }
@@ -32,7 +33,6 @@
         }
         .active-follow { background: #4285F4 !important; color: white !important; }
 
-        /* 경로 이탈 경고 UI */
         #off-route-warning {
             position: absolute; top: 140px; left: 50%; transform: translateX(-50%);
             background: #ff1744; color: white; padding: 12px 24px; border-radius: 30px;
@@ -50,7 +50,7 @@
             <div id="gps-dot"></div>
             <span id="gps-text">위치 정보 수신 대기 중...</span>
         </div>
-        <input type="file" id="geojson-input" accept=".geojson, .json">
+        <input type="file" id="geojson-input" accept=".geojson, .json, .gpx, .kml">
     </div>
 
     <div id="off-route-warning">🚨 경로 이탈 주의!</div>
@@ -78,7 +78,7 @@
         let prevFinalLat = null, prevFinalLng = null;
         let lastSelectedSegmentId = null;
         
-        let wakeLock = null; // 화면 꺼짐 방지 객체
+        let wakeLock = null; 
 
         const gpsDot = document.getElementById('gps-dot');
         const gpsText = document.getElementById('gps-text');
@@ -86,17 +86,14 @@
         const locateBtn = document.getElementById('locate-btn');
         const offRouteWarning = document.getElementById('off-route-warning');
 
-        // 화면 꺼짐 방지 요청 함수
         async function requestWakeLock() {
             if ('wakeLock' in navigator) {
                 try {
                     wakeLock = await navigator.wakeLock.request('screen');
-                    console.log('화면 꺼짐 방지 작동 시작');
                 } catch (err) { console.error('화면 꺼짐 방지 실패:', err.message); }
             }
         }
 
-        // 브라우저 탭을 나갔다 들어왔을 때 화면 꺼짐 방지 재활성화
         document.addEventListener('visibilitychange', async () => {
             if (wakeLock !== null && document.visibilityState === 'visible') {
                 requestWakeLock();
@@ -145,17 +142,43 @@
             }
         });
 
+        // [신규] 멀티 포맷 파싱 로직 추가
         document.getElementById('geojson-input').addEventListener('change', function(e) {
             const file = e.target.files[0];
             if (!file) return;
+            
+            // 파일 확장자 추출
+            const extension = file.name.split('.').pop().toLowerCase();
             const reader = new FileReader();
+            
             reader.onload = (e) => {
                 try {
-                    const data = JSON.parse(e.target.result);
-                    if (baseRouteLayer) baseRouteLayer.setMap(null);
-                    if (passedPolyline) passedPolyline.setMap(null);
-                    processGeoJSON(data);
-                } catch (err) { alert('GeoJSON 파싱 오류가 발생했습니다.'); }
+                    let geojsonData = null;
+                    const fileContent = e.target.result;
+
+                    if (extension === 'json' || extension === 'geojson') {
+                        geojsonData = JSON.parse(fileContent);
+                    } else if (extension === 'kml' || extension === 'gpx') {
+                        // XML 기반 데이터는 DOMParser로 읽은 뒤 toGeoJSON 객체로 번역
+                        const dom = new DOMParser().parseFromString(fileContent, 'text/xml');
+                        if (extension === 'kml') {
+                            geojsonData = toGeoJSON.kml(dom);
+                        } else {
+                            geojsonData = toGeoJSON.gpx(dom);
+                        }
+                    }
+
+                    if (geojsonData) {
+                        if (baseRouteLayer) baseRouteLayer.setMap(null);
+                        if (passedPolyline) passedPolyline.setMap(null);
+                        processGeoJSON(geojsonData);
+                    } else {
+                        alert('지원하지 않는 파일 형식입니다.');
+                    }
+                } catch (err) { 
+                    alert('파일을 읽거나 변환하는 중 오류가 발생했습니다.'); 
+                    console.error(err);
+                }
             };
             reader.readAsText(file);
         });
@@ -231,7 +254,7 @@
 
         function startTracking() {
             if (!navigator.geolocation) return;
-            requestWakeLock(); // 앱 실행 시 최초 화면 보호 요청
+            requestWakeLock(); 
             
             trackingWatchId = navigator.geolocation.watchPosition((pos) => {
                 const { latitude: lat, longitude: lng, speed, accuracy, heading } = pos.coords;
@@ -328,7 +351,6 @@
                 if (isAutoFollowing) map.panTo(new kakao.maps.LatLng(fLat, fLng));
 
             }, (err) => {
-                // [신규 복구] 실내/터널 등 GPS 신호 수신 실패 시 에러 처리
                 gpsText.innerText = "GPS 신호 끊김 (탐색 중)";
                 gpsText.style.color = "#ff1744";
                 gpsDot.className = "status-bad";
