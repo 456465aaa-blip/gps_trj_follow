@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <title>Ultimate Kakao Tracker (Strava-grade & Multi-format)</title>
+    <title>Ultimate Kakao Tracker (Auto-Save & Smooth)</title>
     <script type="text/javascript" src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=34bd25e1ff5410300affbf08cb002b43"></script>
     <script src="https://unpkg.com/@turf/turf/turf.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/togeojson/0.16.0/togeojson.min.js"></script>
@@ -78,9 +78,11 @@
         let prevFinalLat = null, prevFinalLng = null;
         let lastSelectedSegmentId = null;
         
-        // 튐 방지(스무딩)용 변수
         let lastValidPos = null;
         let lastValidTime = 0;
+        let currentSpeedMs = 0; 
+        let lastGpsTime = 0;    
+        let lastPathTime = 0; 
         
         let wakeLock = null; 
 
@@ -90,10 +92,52 @@
         const locateBtn = document.getElementById('locate-btn');
         const offRouteWarning = document.getElementById('off-route-warning');
 
+        // 💡 [신규] 로컬 스토리지에 작업 기록 저장하기 (3초마다 실행됨)
+        function saveToLocalStorage() {
+            if (!currentRouteGeoJSON) return; 
+            try {
+                localStorage.setItem('savedRoute', JSON.stringify(currentRouteGeoJSON));
+                if (passedPathCoordinates.length > 0) {
+                    const pathArray = passedPathCoordinates.map(coord => ({
+                        lat: coord.getLat(),
+                        lng: coord.getLng()
+                    }));
+                    localStorage.setItem('savedTrajectory', JSON.stringify(pathArray));
+                }
+            } catch(e) { console.warn('로컬 스토리지 저장 실패'); }
+        }
+
+        // 💡 [신규] 로컬 스토리지에서 작업 기록 불러오기 (페이지 로드 시 1회 실행)
+        function loadFromLocalStorage() {
+            try {
+                const savedRoute = localStorage.getItem('savedRoute');
+                if (savedRoute) {
+                    if (confirm('🚨 이전 작업 기록이 남아있습니다.\n중단된 시점부터 이어서 진행하시겠습니까?')) {
+                        const parsedRoute = JSON.parse(savedRoute);
+                        processGeoJSON(parsedRoute); 
+
+                        const savedTrajectory = localStorage.getItem('savedTrajectory');
+                        if (savedTrajectory) {
+                            const parsedTrajectory = JSON.parse(savedTrajectory);
+                            passedPathCoordinates = parsedTrajectory.map(pt => new kakao.maps.LatLng(pt.lat, pt.lng));
+                            if (passedPolyline) passedPolyline.setPath(passedPathCoordinates);
+                            
+                            if (passedPathCoordinates.length > 0) {
+                                lastPathTime = Date.now();
+                            }
+                        }
+                    } else {
+                        localStorage.removeItem('savedRoute');
+                        localStorage.removeItem('savedTrajectory');
+                    }
+                }
+            } catch(e) { console.warn('로컬 스토리지 불러오기 실패'); }
+        }
+
         async function requestWakeLock() {
             if ('wakeLock' in navigator) {
                 try { wakeLock = await navigator.wakeLock.request('screen'); } 
-                catch (err) { console.error('화면 꺼짐 방지 실패:', err.message); }
+                catch (err) {}
             }
         }
 
@@ -144,6 +188,10 @@
             const ext = file.name.split('.').pop().toLowerCase();
             const reader = new FileReader();
             
+            // 💡 [수정] 새 파일을 올리면 기존 저장 기록은 초기화
+            localStorage.removeItem('savedRoute');
+            localStorage.removeItem('savedTrajectory');
+            
             reader.onload = (e) => {
                 try {
                     let geojsonData = null;
@@ -160,6 +208,7 @@
                         if (baseRouteLayer) baseRouteLayer.setMap(null);
                         if (passedPolyline) passedPolyline.setMap(null);
                         processGeoJSON(geojsonData);
+                        saveToLocalStorage(); // 새 파일 즉시 저장
                     } else alert('지원하지 않는 형식입니다.');
                 } catch (err) { alert('파일 변환 오류가 발생했습니다.'); }
             };
@@ -185,14 +234,15 @@
 
             const w = getDynamicWeight();
             baseRouteLayer = new kakao.maps.Polyline({
-                path: kakaoPaths, strokeWeight: w, strokeColor: '#FF3B30', strokeOpacity: 1.0, strokeStyle: 'solid'
+                path: kakaoPaths, strokeWeight: w, strokeColor: '#FF3B30', strokeOpacity: 0.6, strokeStyle: 'solid'
             });
             baseRouteLayer.setMap(map);
             passedPolyline = new kakao.maps.Polyline({
                 path: [], strokeWeight: w, strokeColor: '#8E8E93', strokeOpacity: 1.0, strokeStyle: 'solid'
             });
             passedPolyline.setMap(map);
-            map.setBounds(bounds);
+            
+            if (kakaoPaths.length > 0) map.setBounds(bounds);
         }
 
         function handleOrientation(event) {
@@ -216,9 +266,25 @@
 
         function smoothAnimate() {
             if (targetLat !== null && userMarker) {
-                if (currentDisplayLat === null) { currentDisplayLat = targetLat; currentDisplayLng = targetLng; }
-                currentDisplayLat += (targetLat - currentDisplayLat) * 0.15;
-                currentDisplayLng += (targetLng - currentDisplayLng) * 0.15;
+                if (currentDisplayLat === null) { 
+                    currentDisplayLat = targetLat; currentDisplayLng = targetLng; 
+                }
+
+                const now = Date.now();
+                const timeSinceLastGps = now - lastGpsTime;
+
+                if (timeSinceLastGps > 1000 && currentSpeedMs > 0.5) {
+                    const moveDist = currentSpeedMs * (16.6 / 1000); 
+                    const currentHeading = lastHeading !== null ? lastHeading : (movementBearing || 0);
+                    
+                    const predicted = turf.destination(turf.point([targetLng, targetLat]), moveDist, currentHeading, {units: 'meters'});
+                    targetLng = predicted.geometry.coordinates[0];
+                    targetLat = predicted.geometry.coordinates[1];
+                }
+
+                currentDisplayLat += (targetLat - currentDisplayLat) * 0.1;
+                currentDisplayLng += (targetLng - currentDisplayLng) * 0.1;
+
                 userMarker.setPosition(new kakao.maps.LatLng(currentDisplayLat, currentDisplayLng));
             }
             requestAnimationFrame(smoothAnimate);
@@ -233,6 +299,9 @@
                 const kmh = ((speed || 0) * 3.6).toFixed(1);
                 speedPanel.innerText = `${kmh} km/h`;
                 
+                currentSpeedMs = speed || 0;
+                lastGpsTime = Date.now();
+                
                 gpsDot.className = accuracy < 15 ? "status-good" : (accuracy < 40 ? "status-normal" : "status-bad");
                 gpsText.innerText = `GPS ${accuracy < 15 ? '양호' : (accuracy < 40 ? '보통' : '불량')} (${accuracy.toFixed(1)}m)`;
                 gpsText.style.color = accuracy < 15 ? "#00c853" : (accuracy < 40 ? "#ffab00" : "#ff1744");
@@ -242,19 +311,17 @@
                 let fLat = rawLat, fLng = rawLng;
                 const now = Date.now();
 
-                // 💡 스트라바급 스무딩 (Kalman Filter Lite)
                 if (lastValidPos && lastValidTime) {
                     const dt = (now - lastValidTime) / 1000;
                     if (dt > 0) {
                         const distJump = turf.distance(turf.point([lastValidPos.lng, lastValidPos.lat]), turf.point([rawLng, rawLat]), {units: 'meters'});
-                        const impliedSpeed = distJump / dt; // m/s
+                        const impliedSpeed = distJump / dt; 
                         
-                        // 물리적으로 불가능한 속도(초당 25m = 시속 90km 이상)의 갑작스러운 튐 무시
                         if (impliedSpeed > 25 && accuracy > 10) {
-                            fLat = lastValidPos.lat * 0.8 + rawLat * 0.2; // 이전 위치를 강하게 유지
+                            fLat = lastValidPos.lat * 0.8 + rawLat * 0.2; 
                             fLng = lastValidPos.lng * 0.8 + rawLng * 0.2;
                         } else {
-                            fLat = lastValidPos.lat * 0.2 + rawLat * 0.8; // 정상 움직임 (가벼운 지터링만 제거)
+                            fLat = lastValidPos.lat * 0.2 + rawLat * 0.8; 
                             fLng = lastValidPos.lng * 0.2 + rawLng * 0.8;
                         }
                     }
@@ -263,27 +330,24 @@
                 lastValidTime = now;
 
                 if (routeSegments.length > 0) {
-                    const userPoint = turf.point([fLng, fLat]); // 스무딩된 위치를 기준으로 스냅 계산
+                    const userPoint = turf.point([fLng, fLat]); 
                     
                     let currentSpeed = speed || 0;
-                    let baseThreshold = currentSpeed > 8.3 ? 35 : (currentSpeed > 4.1 ? 25 : 15);
-                    const snapThreshold = Math.min(40, Math.max(baseThreshold, accuracy * 0.8));
+                    let baseThreshold = currentSpeed > 8.3 ? 20 : (currentSpeed > 4.1 ? 15 : 10);
+                    const snapThreshold = Math.min(25, Math.max(baseThreshold, accuracy * 0.6));
                     
                     let minDWithout = Infinity, minDWith = Infinity;
                     let bestSWithout = null, bestS = null;
 
                     for (const s of routeSegments) {
                         let d = turf.pointToLineDistance(userPoint, s, {units: 'meters'});
-                        
                         if (d < minDWithout) { minDWithout = d; bestSWithout = s; }
 
                         if (d <= snapThreshold) {
-                            // 💡 환승 페널티 (순서 무시, 다른 선분 갈아탈 때 10m 페널티 부여 -> 평행 도로 튐 방지)
                             let penaltyDist = d;
                             if (lastSelectedSegmentId !== null && s.segmentId !== lastSelectedSegmentId) {
                                 penaltyDist += 10; 
                             }
-
                             if (lastHeading !== null) {
                                 const p1 = s.geometry.coordinates[0], p2 = s.geometry.coordinates[1];
                                 const sB = turf.bearing(p1, p2);
@@ -291,14 +355,13 @@
                                 const hD = getSegmentHeadingDiff(lastHeading, sH);
                                 
                                 if (hD <= 90 && penaltyDist < minDWith) { 
-                                    minDWith = penaltyDist; 
-                                    bestS = s; 
+                                    minDWith = penaltyDist; bestS = s; 
                                 }
                             }
                         }
                     }
 
-                    if (minDWithout > 40) {
+                    if (minDWithout > 25) {
                         offRouteWarning.style.display = 'block';
                         lastSelectedSegmentId = null; 
                     } else {
@@ -306,18 +369,31 @@
                     }
 
                     const targetSegment = bestS || (minDWithout <= snapThreshold ? bestSWithout : null);
-                    
                     if (targetSegment) {
                         lastSelectedSegmentId = targetSegment.segmentId;
                         const snapped = turf.nearestPointOnLine(targetSegment, userPoint);
                         fLat = snapped.geometry.coordinates[1]; 
                         fLng = snapped.geometry.coordinates[0];
-                        
-                        if (passedPathCoordinates.length === 0 || 
-                            turf.distance(turf.point([fLng, fLat]), turf.point([passedPathCoordinates[passedPathCoordinates.length-1].getLng(), passedPathCoordinates[passedPathCoordinates.length-1].getLat()]), {units: 'meters'}) > 1) {
-                            passedPathCoordinates.push(new kakao.maps.LatLng(fLat, fLng));
-                            passedPolyline.setPath(passedPathCoordinates);
-                        }
+                    }
+                }
+
+                if (passedPathCoordinates.length === 0) {
+                    passedPathCoordinates.push(new kakao.maps.LatLng(fLat, fLng));
+                    if(passedPolyline) passedPolyline.setPath(passedPathCoordinates);
+                    lastPathTime = now;
+                } else {
+                    const lastPoint = passedPathCoordinates[passedPathCoordinates.length-1];
+                    const distFromLast = turf.distance(turf.point([fLng, fLat]), turf.point([lastPoint.getLng(), lastPoint.getLat()]), {units: 'meters'});
+                    
+                    let timeSinceLastPath = (now - lastPathTime) / 1000;
+                    if (timeSinceLastPath <= 0) timeSinceLastPath = 1; 
+                    
+                    let pathImpliedSpeed = distFromLast / timeSinceLastPath; 
+                    
+                    if (distFromLast > 1 && pathImpliedSpeed < 40) {
+                        passedPathCoordinates.push(new kakao.maps.LatLng(fLat, fLng));
+                        if(passedPolyline) passedPolyline.setPath(passedPathCoordinates);
+                        lastPathTime = now; 
                     }
                 }
 
@@ -351,7 +427,11 @@
             }, { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 });
         }
 
-        window.onload = startTracking;
+        window.onload = () => {
+            loadFromLocalStorage(); // 💡 [신규] 로딩 시 복구 팝업 실행
+            startTracking();
+            setInterval(saveToLocalStorage, 3000); // 💡 [신규] 3초마다 자동 저장 엔진 가동
+        };
     </script>
 </body>
 </html>
