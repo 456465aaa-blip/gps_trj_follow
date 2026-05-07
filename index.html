@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <title>Ultimate Kakao Tracker (WakeLock & Alert)</title>
+    <title>Ultimate Kakao Tracker (Final)</title>
     <script type="text/javascript" src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=34bd25e1ff5410300affbf08cb002b43"></script>
     <script src="https://unpkg.com/@turf/turf/turf.min.js"></script>
     <style>
@@ -32,7 +32,7 @@
         }
         .active-follow { background: #4285F4 !important; color: white !important; }
 
-        /* [신규] 경로 이탈 경고 UI */
+        /* 경로 이탈 경고 UI */
         #off-route-warning {
             position: absolute; top: 140px; left: 50%; transform: translateX(-50%);
             background: #ff1744; color: white; padding: 12px 24px; border-radius: 30px;
@@ -48,7 +48,7 @@
         <div id="speed-panel">0.0 km/h</div>
         <div id="gps-status-container">
             <div id="gps-dot"></div>
-            <span id="gps-text">지도 로딩 중...</span>
+            <span id="gps-text">위치 정보 수신 대기 중...</span>
         </div>
         <input type="file" id="geojson-input" accept=".geojson, .json">
     </div>
@@ -86,7 +86,7 @@
         const locateBtn = document.getElementById('locate-btn');
         const offRouteWarning = document.getElementById('off-route-warning');
 
-        // [신규] 화면 꺼짐 방지 요청 함수
+        // 화면 꺼짐 방지 요청 함수
         async function requestWakeLock() {
             if ('wakeLock' in navigator) {
                 try {
@@ -127,7 +127,6 @@
         });
 
         locateBtn.addEventListener('click', function() {
-            // 1. 방향 센서 권한 요청
             if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
                 DeviceOrientationEvent.requestPermission().then(response => {
                     if (response === 'granted') window.addEventListener('deviceorientation', handleOrientation);
@@ -136,7 +135,6 @@
                 window.addEventListener('deviceorientationabsolute', handleOrientation, true);
             }
             
-            // 2. 화면 꺼짐 방지 요청
             requestWakeLock();
             
             isAutoFollowing = true;
@@ -242,6 +240,7 @@
                 
                 gpsDot.className = accuracy < 15 ? "status-good" : (accuracy < 40 ? "status-normal" : "status-bad");
                 gpsText.innerText = `GPS ${accuracy < 15 ? '양호' : (accuracy < 40 ? '보통' : '불량')} (${accuracy.toFixed(1)}m)`;
+                gpsText.style.color = accuracy < 15 ? "#00c853" : (accuracy < 40 ? "#ffab00" : "#ff1744");
 
                 if (heading !== null && !isNaN(heading) && speed > 0.5) lastHeading = heading;
 
@@ -264,7 +263,6 @@
                     for (const s of routeSegments) {
                         let d = turf.pointToLineDistance(userPoint, s, {units: 'meters'});
                         
-                        // [신규] 전체 선분 중 가장 가까운 거리 추적 (이탈 경고용)
                         if (d < minDWithout) { minDWithout = d; bestSWithout = s; }
 
                         if (d <= snapThreshold) {
@@ -287,10 +285,9 @@
                         }
                     }
 
-                    // [신규] 경로 이탈 경고 로직 (가장 가까운 선조차 40m 밖에 있으면 이탈로 간주)
                     if (minDWithout > 40) {
                         offRouteWarning.style.display = 'block';
-                        lastSelectedSegmentId = null; // 완전히 이탈했으므로 교차로 페널티 초기화
+                        lastSelectedSegmentId = null; 
                     } else {
                         offRouteWarning.style.display = 'none';
                     }
@@ -330,7 +327,18 @@
                 
                 if (isAutoFollowing) map.panTo(new kakao.maps.LatLng(fLat, fLng));
 
-            }, null, { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 });
+            }, (err) => {
+                // [신규 복구] 실내/터널 등 GPS 신호 수신 실패 시 에러 처리
+                gpsText.innerText = "GPS 신호 끊김 (탐색 중)";
+                gpsText.style.color = "#ff1744";
+                gpsDot.className = "status-bad";
+                speedPanel.innerText = "-.- km/h";
+                
+                locateBtn.classList.remove('active-follow');
+                locateBtn.innerText = "📍 위치 신호 대기중";
+                isAutoFollowing = false;
+                
+            }, { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 });
         }
 
         window.onload = startTracking;
