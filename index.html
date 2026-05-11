@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <title>Ultimate Kakao Tracker (Layer Delete Support)</title>
+    <title>Ultimate Kakao Tracker (File Reload Fix)</title>
     <script type="text/javascript" src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=34bd25e1ff5410300affbf08cb002b43&libraries=services"></script>
     <script src="https://unpkg.com/@turf/turf/turf.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/togeojson/0.16.0/togeojson.min.js"></script>
@@ -25,7 +25,6 @@
         #progress-bar-bg { width: 100%; height: 8px; background: #eee; border-radius: 4px; overflow: hidden; }
         #progress-bar-fill { width: 0%; height: 100%; background: linear-gradient(90deg, #4285F4, #34C759); transition: width 0.3s; }
         
-        /* 레이어 제어 패널 스타일 고도화 */
         #layer-control { position: absolute; top: 15px; left: 15px; z-index: 1000; background: rgba(255, 255, 255, 0.95); padding: 10px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.15); border: 1px solid #ddd; min-width: 160px; display: flex; flex-direction: column; gap: 8px; }
         .layer-title { font-size: 12px; font-weight: 800; color: #333; margin-bottom: 2px; }
         .layer-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11px; font-weight: 600; color: #555; padding: 2px 0; border-bottom: 1px solid #f0f0f0; }
@@ -286,7 +285,6 @@
             updateLayerUI(); 
         }
 
-        // 💡 [수정] 레이어 삭제 기능이 포함된 UI 업데이트
         function updateLayerUI() {
             const layerControl = document.getElementById('layer-control');
             const layerList = document.getElementById('layer-list');
@@ -317,7 +315,6 @@
                 leftPart.appendChild(colorBox); 
                 leftPart.appendChild(nameSpan);
 
-                // 💡 삭제 버튼 추가
                 const delBtn = document.createElement('span');
                 delBtn.className = 'layer-del-btn';
                 delBtn.innerText = '삭제';
@@ -334,15 +331,14 @@
             });
         }
 
-        // 💡 [신규] 레이어 삭제 로직
         function deleteRoute(routeId) {
             const index = loadedRoutes.findIndex(r => r.id === routeId);
             if (index > -1) {
-                loadedRoutes[index].polyline.setMap(null); // 지도에서 제거
-                loadedRoutes.splice(index, 1); // 배열에서 제거
-                updateTotalRouteLength(); // 전체 길이 재계산
-                updateLayerUI(); // 리스트 갱신
-                saveToLocalStorage(); // 변경사항 저장
+                loadedRoutes[index].polyline.setMap(null); 
+                loadedRoutes.splice(index, 1); 
+                updateTotalRouteLength(); 
+                updateLayerUI(); 
+                saveToLocalStorage(); 
             }
         }
 
@@ -372,10 +368,12 @@
                         else data = JSON.parse(ev.target.result);
                         addRouteToMap(data, file.name, routeColors[loadedRoutes.length % 5], true);
                         saveToLocalStorage();
-                    } catch(e) { alert("파일 형식 오류"); }
+                    } catch(err) { alert("파일 형식 오류"); }
                 };
                 reader.readAsText(file);
             });
+            // 💡 [핵심 버그 픽스] input의 value를 초기화하여 같은 파일을 삭제 후 다시 올릴 수 있게 함
+            e.target.value = '';
         };
 
         kakao.maps.event.addListener(map, 'zoom_changed', () => { updateLineWeight(); updatePinScale(); if (!isAutoFollowing) lastMapInteractionTime = Date.now(); });
