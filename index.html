@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <title>Ultimate Kakao Tracker (60fps Ultra Smooth)</title>
+    <title>Ultimate Kakao Tracker (Layer Delete Support)</title>
     <script type="text/javascript" src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=34bd25e1ff5410300affbf08cb002b43&libraries=services"></script>
     <script src="https://unpkg.com/@turf/turf/turf.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/togeojson/0.16.0/togeojson.min.js"></script>
@@ -25,17 +25,20 @@
         #progress-bar-bg { width: 100%; height: 8px; background: #eee; border-radius: 4px; overflow: hidden; }
         #progress-bar-fill { width: 0%; height: 100%; background: linear-gradient(90deg, #4285F4, #34C759); transition: width 0.3s; }
         
-        #layer-control { position: absolute; top: 15px; left: 15px; z-index: 1000; background: rgba(255, 255, 255, 0.95); padding: 10px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.15); border: 1px solid #ddd; max-width: 150px; display: flex; flex-direction: column; gap: 8px; }
+        /* 레이어 제어 패널 스타일 고도화 */
+        #layer-control { position: absolute; top: 15px; left: 15px; z-index: 1000; background: rgba(255, 255, 255, 0.95); padding: 10px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.15); border: 1px solid #ddd; min-width: 160px; display: flex; flex-direction: column; gap: 8px; }
         .layer-title { font-size: 12px; font-weight: 800; color: #333; margin-bottom: 2px; }
-        .layer-item { display: flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; color: #555; word-break: break-all; }
-        .layer-color-box { width: 12px; height: 12px; border-radius: 3px; }
+        .layer-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11px; font-weight: 600; color: #555; padding: 2px 0; border-bottom: 1px solid #f0f0f0; }
+        .layer-item-left { display: flex; align-items: center; gap: 5px; flex: 1; overflow: hidden; }
+        .layer-color-box { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+        .layer-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .layer-del-btn { color: #ff1744; cursor: pointer; font-size: 10px; font-weight: 800; flex-shrink: 0; padding: 2px 4px; }
 
         #pin-list-panel { position: absolute; top: 0; right: -280px; width: 260px; height: 100vh; background: rgba(255, 255, 255, 0.98); z-index: 1001; transition: right 0.3s ease-in-out; box-shadow: -4px 0 20px rgba(0,0,0,0.1); display: flex; flex-direction: column; }
         #pin-list-panel.open { right: 0; }
         #pin-list-header { padding: 20px; font-size: 16px; font-weight: 900; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center; }
         #pin-items-container { flex: 1; overflow-y: auto; padding: 10px; }
         .pin-item { background: white; border: 1px solid #eee; border-radius: 10px; padding: 12px; margin-bottom: 10px; cursor: pointer; transition: background 0.2s; position: relative; }
-        .pin-item:active { background: #f9f9f9; }
         .pin-item-memo { font-size: 13px; font-weight: 800; color: #333; display: block; margin-bottom: 4px; }
         .pin-item-addr { font-size: 11px; color: #888; word-break: break-all; }
         .pin-delete-btn { position: absolute; top: 10px; right: 10px; color: #ff1744; font-size: 12px; padding: 5px; }
@@ -229,7 +232,11 @@
         }
 
         function updateProgressUI() {
-            if (totalRouteLengthMeters <= 0) return;
+            if (totalRouteLengthMeters <= 0) {
+                progressPercent.innerText = "현재 진행률 0%";
+                progressBarFill.style.width = "0%";
+                return;
+            }
             let percent = Math.min(100, (totalPassedLengthMeters / totalRouteLengthMeters) * 100);
             progressPercent.innerText = `현재 진행률 ${percent.toFixed(1)}%`;
             progressBarFill.style.width = `${percent}%`;
@@ -259,6 +266,7 @@
                     totalPassedLengthMeters += turf.distance(turf.point([p1.getLng(), p1.getLat()]), turf.point([p2.getLng(), p2.getLat()]), {units: 'meters'});
                 }
             });
+            updateProgressUI();
         }
 
         function addRouteToMap(geojsonData, name, color, visible) {
@@ -273,25 +281,69 @@
             loadedRoutes.push({ id: Date.now(), name, color, visible, data: geojsonData, polyline: poly, segments, length });
             if (visible && kakaoPaths.length > 0) map.setBounds(bounds);
             if (!passedPolyline) initPassedPolyline();
-            totalRouteLengthMeters = loadedRoutes.filter(r => r.visible).reduce((s, r) => s + r.length, 0);
-            updateProgressUI();
+            
+            updateTotalRouteLength();
             updateLayerUI(); 
         }
 
+        // 💡 [수정] 레이어 삭제 기능이 포함된 UI 업데이트
         function updateLayerUI() {
             const layerControl = document.getElementById('layer-control');
             const layerList = document.getElementById('layer-list');
             if (loadedRoutes.length === 0) { layerControl.style.display = 'none'; return; }
             layerControl.style.display = 'flex'; layerList.innerHTML = '';
+            
             loadedRoutes.forEach(route => {
-                const item = document.createElement('div'); item.className = 'layer-item';
-                const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = route.visible;
+                const item = document.createElement('div'); 
+                item.className = 'layer-item';
+                
+                const leftPart = document.createElement('div');
+                leftPart.className = 'layer-item-left';
+                
+                const checkbox = document.createElement('input'); 
+                checkbox.type = 'checkbox'; 
+                checkbox.checked = route.visible;
                 checkbox.onchange = () => toggleRouteVisibility(route.id, checkbox.checked);
-                const colorBox = document.createElement('div'); colorBox.className = 'layer-color-box'; colorBox.style.background = route.color;
-                const nameSpan = document.createElement('span'); nameSpan.innerText = route.name.length > 10 ? route.name.substring(0,10) + '...' : route.name;
-                item.appendChild(checkbox); item.appendChild(colorBox); item.appendChild(nameSpan);
+                
+                const colorBox = document.createElement('div'); 
+                colorBox.className = 'layer-color-box'; 
+                colorBox.style.background = route.color;
+                
+                const nameSpan = document.createElement('span'); 
+                nameSpan.className = 'layer-name';
+                nameSpan.innerText = route.name.length > 10 ? route.name.substring(0,10) + '...' : route.name;
+                
+                leftPart.appendChild(checkbox); 
+                leftPart.appendChild(colorBox); 
+                leftPart.appendChild(nameSpan);
+
+                // 💡 삭제 버튼 추가
+                const delBtn = document.createElement('span');
+                delBtn.className = 'layer-del-btn';
+                delBtn.innerText = '삭제';
+                delBtn.onclick = (e) => {
+                    e.stopPropagation();
+                    if(confirm(`'${route.name}' 레이어를 삭제하시겠습니까?`)) {
+                        deleteRoute(route.id);
+                    }
+                };
+
+                item.appendChild(leftPart);
+                item.appendChild(delBtn);
                 layerList.appendChild(item);
             });
+        }
+
+        // 💡 [신규] 레이어 삭제 로직
+        function deleteRoute(routeId) {
+            const index = loadedRoutes.findIndex(r => r.id === routeId);
+            if (index > -1) {
+                loadedRoutes[index].polyline.setMap(null); // 지도에서 제거
+                loadedRoutes.splice(index, 1); // 배열에서 제거
+                updateTotalRouteLength(); // 전체 길이 재계산
+                updateLayerUI(); // 리스트 갱신
+                saveToLocalStorage(); // 변경사항 저장
+            }
         }
 
         function toggleRouteVisibility(routeId, isVisible) {
@@ -299,9 +351,14 @@
             if (route) {
                 route.visible = isVisible;
                 if (isVisible) route.polyline.setMap(map); else route.polyline.setMap(null);
-                totalRouteLengthMeters = loadedRoutes.filter(r => r.visible).reduce((s, r) => s + r.length, 0);
-                updateProgressUI(); saveToLocalStorage();
+                updateTotalRouteLength(); 
+                saveToLocalStorage();
             }
+        }
+
+        function updateTotalRouteLength() {
+            totalRouteLengthMeters = loadedRoutes.filter(r => r.visible).reduce((s, r) => s + r.length, 0);
+            updateProgressUI();
         }
 
         document.getElementById('geojson-input').onchange = (e) => {
@@ -310,10 +367,12 @@
                 reader.onload = (ev) => {
                     const ext = file.name.split('.').pop().toLowerCase();
                     let data = null;
-                    if (ext === 'kml' || ext === 'gpx') data = ext === 'kml' ? toGeoJSON.kml(new DOMParser().parseFromString(ev.target.result, 'text/xml')) : toGeoJSON.gpx(new DOMParser().parseFromString(ev.target.result, 'text/xml'));
-                    else data = JSON.parse(ev.target.result);
-                    addRouteToMap(data, file.name, routeColors[loadedRoutes.length % 5], true);
-                    saveToLocalStorage();
+                    try {
+                        if (ext === 'kml' || ext === 'gpx') data = ext === 'kml' ? toGeoJSON.kml(new DOMParser().parseFromString(ev.target.result, 'text/xml')) : toGeoJSON.gpx(new DOMParser().parseFromString(ev.target.result, 'text/xml'));
+                        else data = JSON.parse(ev.target.result);
+                        addRouteToMap(data, file.name, routeColors[loadedRoutes.length % 5], true);
+                        saveToLocalStorage();
+                    } catch(e) { alert("파일 형식 오류"); }
                 };
                 reader.readAsText(file);
             });
@@ -323,29 +382,20 @@
         kakao.maps.event.addListener(map, 'dragstart', () => { isAutoFollowing = false; locateBtn.classList.remove('active-follow'); locateBtn.innerText = "📍 수동 (주행 시 자동복귀)"; lastMapInteractionTime = Date.now(); });
         kakao.maps.event.addListener(map, 'dragend', () => lastMapInteractionTime = Date.now());
 
-        locateBtn.onclick = () => {
-            isAutoFollowing = true; lastMapInteractionTime = 0;
-            locateBtn.classList.add('active-follow'); locateBtn.innerText = "🎯 실시간 추적 중";
-            // map.panTo 제거됨 -> smoothAnimate에서 60fps로 즉각 카메라를 맞춰줌
-        };
+        locateBtn.onclick = () => { isAutoFollowing = true; lastMapInteractionTime = 0; locateBtn.classList.add('active-follow'); locateBtn.innerText = "🎯 실시간 추적 중"; if (targetLat) map.panTo(new kakao.maps.LatLng(targetLat, targetLng)); };
 
         function getArrowHTML(h) { return `<div style="width: 32px; height: 32px; transform: rotate(${h||0}deg);"><svg viewBox="0 0 100 100"><polygon points="50,10 90,90 50,70 10,90" fill="#4285F4" stroke="white" stroke-width="4"/></svg></div>`; }
 
-        // ==========================================
-        // 💡 [핵심] 60fps 극강 스무딩 애니메이션 & 카메라
-        // ==========================================
         function smoothAnimate() {
             if (targetLat !== null && userMarker) {
                 if (currentDisplayLat === null) { currentDisplayLat = targetLat; currentDisplayLng = targetLng; }
-                
                 const now = Date.now();
                 let timeSinceLastGps = now - lastGpsTime;
-                if (timeSinceLastGps > 10000) timeSinceLastGps = 10000; // 최대 10초까지만 예측 제한
+                if (timeSinceLastGps > 10000) timeSinceLastGps = 10000; 
 
                 let projectedLat = targetLat;
                 let projectedLng = targetLng;
 
-                // GPS 신호가 없는 동안에도 속도 기반으로 가상 타겟 지점을 60fps로 실시간 전진시킴
                 if (currentSpeedMs > 0.5) {
                     const distSinceGps = currentSpeedMs * (timeSinceLastGps / 1000);
                     const currentHeading = movementBearing !== null ? movementBearing : (lastHeading || 0);
@@ -354,17 +404,12 @@
                     projectedLat = predicted.geometry.coordinates[1];
                 }
 
-                // 마커의 렌더링 위치는 가상의 타겟 지점을 향해 부드럽게 쫓아감 (고무줄 효과)
                 currentDisplayLat += (projectedLat - currentDisplayLat) * 0.1;
                 currentDisplayLng += (projectedLng - currentDisplayLng) * 0.1;
 
                 const newPos = new kakao.maps.LatLng(currentDisplayLat, currentDisplayLng);
                 userMarker.setPosition(newPos);
-
-                // 💡 [추가] 1초마다 덜컹거리던 카메라 줌 점프(panTo)를 지우고, 마커를 따라 60fps 연속 스크롤 처리
-                if (isAutoFollowing) {
-                    map.setCenter(newPos);
-                }
+                if (isAutoFollowing) { map.setCenter(newPos); }
             }
             requestAnimationFrame(smoothAnimate);
         }
@@ -374,10 +419,7 @@
                 const { latitude: rLat, longitude: rLng, speed, accuracy, heading } = pos.coords;
                 const kmh = (speed || 0) * 3.6;
                 speedPanel.innerText = `${kmh.toFixed(1)} km/h`;
-                
-                currentSpeedMs = speed || 0; 
-                lastGpsTime = Date.now(); // 새로운 GPS 수신 시점 초기화
-                
+                currentSpeedMs = speed || 0; lastGpsTime = Date.now();
                 gpsDot.className = accuracy < 15 ? "status-good" : (accuracy < 40 ? "status-normal" : "status-bad");
                 gpsText.innerText = `GPS ${accuracy < 15 ? '양호' : '보통'} (${accuracy.toFixed(1)}m)`;
                 if (speed > 0.5 && heading !== null) lastHeading = heading;
@@ -411,37 +453,22 @@
                         }
                     });
 
-                    if (minDWithout > 25) offRouteWarning.style.display = 'block'; 
-                    else offRouteWarning.style.display = 'none';
-
-                    if (bestS) { 
-                        const snp = turf.nearestPointOnLine(bestS, userPt); 
-                        fLat = snp.geometry.coordinates[1]; fLng = snp.geometry.coordinates[0]; 
-                        isSnapped = true; 
-                    }
+                    if (minDWithout > 25) offRouteWarning.style.display = 'block'; else offRouteWarning.style.display = 'none';
+                    if (bestS) { const snp = turf.nearestPointOnLine(bestS, userPt); fLat = snp.geometry.coordinates[1]; fLng = snp.geometry.coordinates[0]; isSnapped = true; }
                 }
 
                 if (isSnapped) {
                     const currentLatLng = new kakao.maps.LatLng(fLat, fLng);
                     if (!wasSnapped || passedPathCoordinates.length === 0) {
-                        passedPathCoordinates.push([currentLatLng]);
-                        lastPathTime = Date.now();
+                        passedPathCoordinates.push([currentLatLng]); lastPathTime = Date.now();
                         if(passedPolyline) passedPolyline.setPath(passedPathCoordinates);
                     } else {
                         const currentSegment = passedPathCoordinates[passedPathCoordinates.length - 1];
                         const lastPoint = currentSegment[currentSegment.length - 1];
                         const dist = turf.distance(turf.point([fLng, fLat]), turf.point([lastPoint.getLng(), lastPoint.getLat()]), {units:'meters'});
-
-                        let timeSinceLastPath = (Date.now() - lastPathTime) / 1000;
-                        if (timeSinceLastPath <= 0) timeSinceLastPath = 1;
-
-                        if (dist > 1 && dist/timeSinceLastPath < 40) {
-                            currentSegment.push(currentLatLng);
-                            lastPathTime = Date.now();
-                            if (dist < 50) {
-                                totalPassedLengthMeters += dist; 
-                                updateProgressUI(); 
-                            }
+                        if (dist > 1 && dist/((Date.now()-lastPathTime)/1000) < 40) {
+                            currentSegment.push(currentLatLng); lastPathTime = Date.now();
+                            if (dist < 50) { totalPassedLengthMeters += dist; updateProgressUI(); }
                             if(passedPolyline) passedPolyline.setPath(passedPathCoordinates); 
                         }
                     }
@@ -449,23 +476,13 @@
                 wasSnapped = isSnapped; 
 
                 targetLat = fLat; targetLng = fLng;
-                if (prevFinalLat && turf.distance(turf.point([prevFinalLng, prevFinalLat]), turf.point([fLng, fLat]), {units:'meters'}) > 1) {
-                    movementBearing = (turf.bearing(turf.point([prevFinalLng, prevFinalLat]), turf.point([fLng, fLat])) + 360) % 360;
-                }
+                if (prevFinalLat && turf.distance(turf.point([prevFinalLng, prevFinalLat]), turf.point([fLng, fLat]), {units:'meters'}) > 1) { movementBearing = (turf.bearing(turf.point([prevFinalLng, prevFinalLat]), turf.point([fLng, fLat])) + 360) % 360; }
                 prevFinalLat = fLat; prevFinalLng = fLng;
 
                 if (!userMarker) { userMarker = new kakao.maps.CustomOverlay({ position: new kakao.maps.LatLng(fLat, fLng), content: getArrowHTML(movementBearing||lastHeading), xAnchor: 0.5, yAnchor: 0.5 }); userMarker.setMap(map); smoothAnimate(); }
                 else userMarker.setContent(getArrowHTML(movementBearing||lastHeading));
 
-                if (!isAutoFollowing && lastMapInteractionTime > 0 && Date.now() - lastMapInteractionTime > 5000 && kmh >= 5.0) { 
-                    isAutoFollowing = true; 
-                    locateBtn.classList.add('active-follow'); 
-                    locateBtn.innerText = "🎯 실시간 추적 중"; 
-                    lastMapInteractionTime = 0;
-                }
-                
-                // 💡 [제거 완료] 이전 코드에 있던 map.panTo() 삭제! 이제 smoothAnimate()가 부드럽게 지도를 옮깁니다.
-
+                if (!isAutoFollowing && lastMapInteractionTime > 0 && Date.now() - lastMapInteractionTime > 5000 && kmh >= 5.0) { isAutoFollowing = true; locateBtn.classList.add('active-follow'); locateBtn.innerText = "🎯 실시간 추적 중"; lastMapInteractionTime = 0; }
             }, null, { enableHighAccuracy: true });
         }
 
