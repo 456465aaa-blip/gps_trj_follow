@@ -268,7 +268,7 @@
                 turf.coordEach(geojsonData, (c) => { const lp = new kakao.maps.LatLng(c[1], c[0]); kakaoPaths.push(lp); bounds.extend(lp); });
                 length = turf.length(geojsonData, {units: 'meters'});
             } catch(e) {}
-            const poly = new kakao.maps.Polyline({ path: kakaoPaths, strokeWeight: getDynamicWeight(), strokeColor: color, strokeOpacity: 0.6, strokeStyle: 'solid' });
+            const poly = new kakao.maps.Polyline({ path: kakaoPaths, strokeWeight: getDynamicWeight(), strokeColor: color, strokeOpacity: 1.0, strokeStyle: 'solid' });
             if (visible) poly.setMap(map);
             loadedRoutes.push({ id: Date.now(), name, color, visible, data: geojsonData, polyline: poly, segments, length });
             if (visible && kakaoPaths.length > 0) map.setBounds(bounds);
