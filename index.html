@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <title>Ultimate Kakao Tracker (Auto Address Pin)</title>
+    <title>Ultimate Kakao Tracker (Pin Management Panel)</title>
     <script type="text/javascript" src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=34bd25e1ff5410300affbf08cb002b43&libraries=services"></script>
     <script src="https://unpkg.com/@turf/turf/turf.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/togeojson/0.16.0/togeojson.min.js"></script>
@@ -11,6 +11,7 @@
         body { margin: 0; padding: 0; font-family: 'Pretendard', sans-serif; overflow: hidden; background: #f0f0f0; }
         #map { height: 100vh; width: 100vw; z-index: 1; }
         
+        /* 메인 컨트롤 */
         #controls {
             position: absolute; top: 15px; left: 50%; transform: translateX(-50%);
             z-index: 1000; background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(5px);
@@ -30,6 +31,7 @@
         #progress-bar-bg { width: 100%; height: 8px; background: #eee; border-radius: 4px; overflow: hidden; }
         #progress-bar-fill { width: 0%; height: 100%; background: linear-gradient(90deg, #4285F4, #34C759); transition: width 0.3s; }
         
+        /* 레이어 관리 */
         #layer-control {
             position: absolute; top: 15px; left: 15px; z-index: 1000;
             background: rgba(255, 255, 255, 0.95); padding: 10px; border-radius: 12px;
@@ -40,50 +42,48 @@
         .layer-item { display: flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; color: #555; word-break: break-all; }
         .layer-color-box { width: 12px; height: 12px; border-radius: 3px; }
 
-        #pin-btn {
-            position: absolute; bottom: 40px; left: 20px; z-index: 1000;
-            background: white; border: none; border-radius: 50px;
-            padding: 16px; font-size: 16px; font-weight: 800; color: #FF9500;
-            cursor: pointer; box-shadow: 0 6px 20px rgba(0,0,0,0.25);
-            display: flex; align-items: center; justify-content: center; width: 50px; height: 50px;
+        /* [신규] 핀 관리 리스트 패널 스타일 */
+        #pin-list-panel {
+            position: absolute; top: 0; right: -280px; width: 260px; height: 100vh;
+            background: rgba(255, 255, 255, 0.98); z-index: 1001; transition: right 0.3s ease-in-out;
+            box-shadow: -4px 0 20px rgba(0,0,0,0.1); display: flex; flex-direction: column;
         }
-        
+        #pin-list-panel.open { right: 0; }
+        #pin-list-header { padding: 20px; font-size: 16px; font-weight: 900; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center; }
+        #pin-items-container { flex: 1; overflow-y: auto; padding: 10px; }
+        .pin-item {
+            background: white; border: 1px solid #eee; border-radius: 10px; padding: 12px; margin-bottom: 10px;
+            cursor: pointer; transition: background 0.2s; position: relative;
+        }
+        .pin-item:active { background: #f9f9f9; }
+        .pin-item-memo { font-size: 13px; font-weight: 800; color: #333; display: block; margin-bottom: 4px; }
+        .pin-item-addr { font-size: 11px; color: #888; word-break: break-all; }
+        .pin-delete-btn { position: absolute; top: 10px; right: 10px; color: #ff1744; font-size: 12px; padding: 5px; }
+
+        /* 핀 아이콘 및 툴팁 */
+        #pin-btn { position: absolute; bottom: 40px; left: 20px; z-index: 1000; background: white; border: none; border-radius: 50px; padding: 16px; font-size: 16px; font-weight: 800; color: #FF9500; cursor: pointer; box-shadow: 0 6px 20px rgba(0,0,0,0.25); display: flex; align-items: center; justify-content: center; width: 50px; height: 50px; }
+        #pin-list-toggle { position: absolute; top: 80px; right: 20px; z-index: 1000; background: white; border: none; border-radius: 50%; width: 50px; height: 50px; font-size: 20px; cursor: pointer; box-shadow: 0 4px 15px rgba(0,0,0,0.2); display: flex; align-items: center; justify-content: center; }
+
         .pin-container { position: relative; cursor: pointer; padding-bottom: 5px; transform-origin: bottom center; transition: transform 0.2s ease; }
         .pin-icon { width: 28px; height: 28px; background: white; border: 2px solid #FF9500; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; box-shadow: 0 3px 6px rgba(0,0,0,0.3); position: relative; z-index: 2; }
-
-        /* [수정] 주소가 들어갈 툴팁 스타일 고도화 */
-        .pin-tooltip {
-            position: absolute; bottom: 40px; left: 50%; transform: translateX(-50%);
-            background: white; border: 2px solid #FF9500; padding: 10px 14px; border-radius: 12px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.2); white-space: pre-wrap; word-break: keep-all;
-            max-width: 220px; width: max-content; text-align: left; z-index: 1;
-            opacity: 0; visibility: hidden; transition: all 0.2s ease-in-out;
-        }
+        .pin-tooltip { position: absolute; bottom: 40px; left: 50%; transform: translateX(-50%); background: white; border: 2px solid #FF9500; padding: 10px 14px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.2); white-space: pre-wrap; word-break: keep-all; max-width: 220px; width: max-content; text-align: left; z-index: 1; opacity: 0; visibility: hidden; transition: all 0.2s ease-in-out; }
         .tooltip-address { font-size: 11px; color: #888; font-weight: 600; display: block; border-bottom: 1px solid #eee; padding-bottom: 4px; margin-bottom: 4px; }
         .tooltip-memo { font-size: 13px; color: #333; font-weight: 800; display: block; }
-
-        .pin-tooltip::after { content: ''; position: absolute; bottom: -6px; left: 50%; transform: translateX(-50%); border-width: 6px 5px 0; border-style: solid; border-color: #FF9500 transparent transparent transparent; }
         .pin-tooltip.show { opacity: 1; visibility: visible; bottom: 45px; }
+        .pin-tooltip::after { content: ''; position: absolute; bottom: -6px; left: 50%; transform: translateX(-50%); border-width: 6px 5px 0; border-style: solid; border-color: #FF9500 transparent transparent transparent; }
 
-        #locate-btn {
-            position: absolute; bottom: 40px; right: 20px; z-index: 1000;
-            background: white; border: none; border-radius: 50px;
-            padding: 16px 24px; font-size: 16px; font-weight: 800; color: #4285F4;
-            cursor: pointer; box-shadow: 0 6px 20px rgba(0,0,0,0.25);
-            display: flex; align-items: center; gap: 8px; transition: all 0.3s ease;
-        }
+        #locate-btn { position: absolute; bottom: 40px; right: 20px; z-index: 1000; background: white; border: none; border-radius: 50px; padding: 16px 24px; font-size: 16px; font-weight: 800; color: #4285F4; cursor: pointer; box-shadow: 0 6px 20px rgba(0,0,0,0.25); display: flex; align-items: center; gap: 8px; transition: all 0.3s ease; }
         .active-follow { background: #4285F4 !important; color: white !important; }
-
-        #off-route-warning {
-            position: absolute; top: 160px; left: 50%; transform: translateX(-50%);
-            background: #ff1744; color: white; padding: 12px 24px; border-radius: 30px;
-            font-weight: 900; font-size: 16px; z-index: 1000; box-shadow: 0 4px 15px rgba(255,23,68,0.5);
-            display: none; animation: blink 0.8s infinite alternate; letter-spacing: -0.5px;
-        }
+        #off-route-warning { position: absolute; top: 160px; left: 50%; transform: translateX(-50%); background: #ff1744; color: white; padding: 12px 24px; border-radius: 30px; font-weight: 900; font-size: 16px; z-index: 1000; box-shadow: 0 4px 15px rgba(255,23,68,0.5); display: none; animation: blink 0.8s infinite alternate; letter-spacing: -0.5px; }
         @keyframes blink { from { opacity: 1; } to { opacity: 0.5; } }
     </style>
 </head>
 <body>
+
+    <div id="pin-list-panel">
+        <div id="pin-list-header">📌 핀 목록 <span id="close-panel" style="cursor:pointer; font-size:24px;">&times;</span></div>
+        <div id="pin-items-container"></div>
+    </div>
 
     <div id="layer-control" style="display: none;">
         <div class="layer-title">🗺️ 레이어 목록</div>
@@ -96,8 +96,7 @@
             <div id="gps-dot"></div>
             <span id="gps-text">위치 정보 수신 대기 중...</span>
         </div>
-        <input type="file" id="geojson-input" accept=".geojson, .json, .gpx, .kml" multiple title="여러 파일을 선택할 수 있습니다">
-        
+        <input type="file" id="geojson-input" accept=".geojson, .json, .gpx, .kml" multiple>
         <div id="progress-container">
             <div id="progress-text"><span id="progress-percent">현재 진행률 0%</span></div>
             <div id="progress-bar-bg"><div id="progress-bar-fill"></div></div>
@@ -106,7 +105,8 @@
 
     <div id="off-route-warning">🚨 경로 이탈 주의!</div>
 
-    <button id="pin-btn" title="현장 이슈 기록">📌</button>
+    <button id="pin-list-toggle">📋</button>
+    <button id="pin-btn">📌</button>
     <button id="locate-btn" class="active-follow">🎯 실시간 추적 중</button>
     <div id="map"></div>
 
@@ -114,8 +114,6 @@
         const container = document.getElementById('map');
         const options = { center: new kakao.maps.LatLng(37.5665, 126.9780), level: 3 };
         const map = new kakao.maps.Map(container, options);
-
-        // 💡 [신규] 주소 변환기(Geocoder) 생성
         const geocoder = new kakao.maps.services.Geocoder();
 
         let loadedRoutes = []; 
@@ -151,12 +149,15 @@
         const speedPanel = document.getElementById('speed-panel');
         const locateBtn = document.getElementById('locate-btn');
         const offRouteWarning = document.getElementById('off-route-warning');
-        
-        const layerControl = document.getElementById('layer-control');
-        const layerList = document.getElementById('layer-list');
-        const progressPercent = document.getElementById('progress-percent');
         const progressBarFill = document.getElementById('progress-bar-fill');
+        const progressPercent = document.getElementById('progress-percent');
+        
+        const pinListPanel = document.getElementById('pin-list-panel');
+        const pinItemsContainer = document.getElementById('pin-items-container');
 
+        // ==========================================
+        // 💾 저장 및 불러오기 (리스트 동기화 포함)
+        // ==========================================
         function saveToLocalStorage() {
             try {
                 const routesToSave = loadedRoutes.map(r => ({ id: r.id, name: r.name, color: r.color, visible: r.visible, data: r.data }));
@@ -165,6 +166,7 @@
                     const pathArray = passedPathCoordinates.map(coord => ({ lat: coord.getLat(), lng: coord.getLng() }));
                     localStorage.setItem('savedTrajectory', JSON.stringify(pathArray));
                 }
+                // 💡 마커 객체는 제외하고 순수 데이터만 저장
                 localStorage.setItem('savedPins', JSON.stringify(savedPins.map(p => ({ lat: p.lat, lng: p.lng, memo: p.memo, address: p.address }))));
             } catch(e) {}
         }
@@ -188,7 +190,8 @@
                         const savedPinsStr = localStorage.getItem('savedPins');
                         if (savedPinsStr) {
                             const parsedPins = JSON.parse(savedPinsStr);
-                            parsedPins.forEach(p => createPinOverlay(p.lat, p.lng, p.memo, p.address || "주소 정보 없음", false));
+                            parsedPins.forEach(p => createPinOverlay(p.lat, p.lng, p.memo, p.address, false));
+                            updatePinListUI();
                         }
                     } else { localStorage.clear(); }
                 }
@@ -196,159 +199,103 @@
         }
 
         // ==========================================
-        // 📌 [수정] 핀 꽂을 때 주소 자동 검색 로직
+        // 📋 핀 리스트 UI 및 패널 제어
         // ==========================================
-        document.getElementById('pin-btn').addEventListener('click', () => {
-            if (targetLat === null || targetLng === null) {
-                alert("위치 수신 중..."); return;
-            }
+        document.getElementById('pin-list-toggle').onclick = () => pinListPanel.classList.toggle('open');
+        document.getElementById('close-panel').onclick = () => pinListPanel.classList.remove('open');
 
-            // 💡 현재 좌표로 주소 찾기
+        function updatePinListUI() {
+            pinItemsContainer.innerHTML = '';
+            savedPins.forEach((pin, index) => {
+                const item = document.createElement('div');
+                item.className = 'pin-item';
+                item.innerHTML = `
+                    <span class="pin-item-memo">${pin.memo}</span>
+                    <span class="pin-item-addr">🏠 ${pin.address}</span>
+                    <span class="pin-delete-btn" onclick="deletePin(event, ${index})">지우기</span>
+                `;
+                item.onclick = () => {
+                    isAutoFollowing = false;
+                    locateBtn.classList.remove('active-follow');
+                    locateBtn.innerText = "📍 수동 (주행 시 자동복귀)";
+                    lastMapInteractionTime = Date.now();
+                    map.panTo(new kakao.maps.LatLng(pin.lat, pin.lng));
+                    // 패널 닫기 (모바일 가독성)
+                    if(window.innerWidth < 600) pinListPanel.classList.remove('open');
+                };
+                pinItemsContainer.appendChild(item);
+            });
+        }
+
+        function deletePin(event, index) {
+            event.stopPropagation();
+            if (confirm('이 핀을 삭제하시겠습니까?')) {
+                savedPins[index].overlay.setMap(null); // 지도에서 제거
+                savedPins.splice(index, 1); // 배열에서 제거
+                updatePinListUI();
+                saveToLocalStorage();
+            }
+        }
+
+        // ==========================================
+        // 📌 핀 생성 및 주소 추출
+        // ==========================================
+        document.getElementById('pin-btn').onclick = () => {
+            if (targetLat === null) return alert("위치 수신 중...");
             geocoder.coord2Address(targetLng, targetLat, (result, status) => {
                 if (status === kakao.maps.services.Status.OK) {
                     const address = result[0].address.address_name;
-                    const memo = prompt(`현재 주소: ${address}\n\n추가 메모를 입력하세요:`, "");
+                    const memo = prompt(`현재 주소: ${address}\n\n메모를 입력하세요:`, "");
                     if (memo !== null) {
                         createPinOverlay(targetLat, targetLng, memo || "기록 없음", address, true);
+                        updatePinListUI();
                         saveToLocalStorage();
                     }
-                } else {
-                    const memo = prompt("주소를 찾을 수 없습니다. 메모를 입력하세요:", "");
-                    if (memo) { createPinOverlay(targetLat, targetLng, memo, "주소 정보 없음", true); saveToLocalStorage(); }
                 }
             });
-        });
+        };
 
         function createPinOverlay(lat, lng, memo, address, isNew) {
             const container = document.createElement('div');
             container.className = 'pin-container';
-
-            const icon = document.createElement('div');
-            icon.className = 'pin-icon';
-            icon.innerText = '📍';
-
-            const tooltip = document.createElement('div');
-            tooltip.className = 'pin-tooltip';
+            const icon = document.createElement('div'); icon.className = 'pin-icon'; icon.innerText = '📍';
+            const tooltip = document.createElement('div'); tooltip.className = 'pin-tooltip';
             tooltip.innerHTML = `<span class="tooltip-address">🏠 ${address}</span><span class="tooltip-memo">${memo}</span>`;
+            icon.onclick = () => tooltip.classList.toggle('show');
+            container.appendChild(icon); container.appendChild(tooltip);
 
-            icon.addEventListener('click', () => { tooltip.classList.toggle('show'); });
-
-            container.appendChild(icon);
-            container.appendChild(tooltip);
-
-            const customOverlay = new kakao.maps.CustomOverlay({
-                position: new kakao.maps.LatLng(lat, lng), content: container, yAnchor: 1 
-            });
-            customOverlay.setMap(map);
-            if (isNew) savedPins.push({ lat, lng, memo, address });
-            updatePinScale(); 
-        }
-
-        // ... [이하 기존 엔진 로직 동일] ...
-
-        document.getElementById('geojson-input').addEventListener('change', function(e) {
-            const files = e.target.files;
-            if (files.length === 0) return;
-            Array.from(files).forEach(file => {
-                const ext = file.name.split('.').pop().toLowerCase();
-                const reader = new FileReader();
-                reader.onload = (event) => {
-                    try {
-                        let geojsonData = null;
-                        if (ext === 'json' || ext === 'geojson') geojsonData = JSON.parse(event.target.result);
-                        else if (ext === 'kml' || ext === 'gpx') {
-                            const dom = new DOMParser().parseFromString(event.target.result, 'text/xml');
-                            geojsonData = ext === 'kml' ? toGeoJSON.kml(dom) : toGeoJSON.gpx(dom);
-                        }
-                        if (geojsonData) {
-                            const color = routeColors[loadedRoutes.length % routeColors.length];
-                            addRouteToMap(geojsonData, file.name, color, true);
-                            saveToLocalStorage();
-                        }
-                    } catch (err) { alert(`${file.name} 변환 오류`); }
-                };
-                reader.readAsText(file);
-            });
-        });
-
-        function addRouteToMap(geojsonData, name, color, visible) {
-            let kakaoPaths = []; let segments = []; let length = 0; let bounds = new kakao.maps.LatLngBounds();
-            try {
-                let segmentId = 0;
-                turf.segmentEach(geojsonData, (currentSegment) => {
-                    currentSegment.segmentId = `route_${loadedRoutes.length}_${segmentId++}`;
-                    segments.push(currentSegment);
-                });
-                turf.coordEach(geojsonData, (c) => {
-                    const latLng = new kakao.maps.LatLng(c[1], c[0]);
-                    kakaoPaths.push(latLng); bounds.extend(latLng);
-                });
-                length = turf.length(geojsonData, {units: 'meters'});
-            } catch(e) {}
-            const polyline = new kakao.maps.Polyline({ path: kakaoPaths, strokeWeight: getDynamicWeight(), strokeColor: color, strokeOpacity: 1.0, strokeStyle: 'solid' });
-            if (visible) polyline.setMap(map);
-            const routeId = `route_${Date.now()}_${Math.floor(Math.random()*1000)}`;
-            loadedRoutes.push({ id: routeId, name, color, visible, data: geojsonData, polyline, segments, length });
-            if (visible && kakaoPaths.length > 0) map.setBounds(bounds);
-            if (!passedPolyline) initPassedPolyline();
-            updateLayerUI(); updateTotalRouteLength();
-        }
-
-        function updateLayerUI() {
-            if (loadedRoutes.length === 0) { layerControl.style.display = 'none'; return; }
-            layerControl.style.display = 'flex'; layerList.innerHTML = '';
-            loadedRoutes.forEach(route => {
-                const item = document.createElement('div'); item.className = 'layer-item';
-                const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = route.visible;
-                checkbox.onchange = () => toggleRouteVisibility(route.id, checkbox.checked);
-                const colorBox = document.createElement('div'); colorBox.className = 'layer-color-box'; colorBox.style.background = route.color;
-                const nameSpan = document.createElement('span'); nameSpan.innerText = route.name.length > 10 ? route.name.substring(0,10) + '...' : route.name;
-                item.appendChild(checkbox); item.appendChild(colorBox); item.appendChild(nameSpan);
-                layerList.appendChild(item);
-            });
-        }
-
-        function toggleRouteVisibility(routeId, isVisible) {
-            const route = loadedRoutes.find(r => r.id === routeId);
-            if (route) {
-                route.visible = isVisible;
-                if (isVisible) route.polyline.setMap(map); else route.polyline.setMap(null);
-                updateTotalRouteLength(); saveToLocalStorage();
+            const overlay = new kakao.maps.CustomOverlay({ position: new kakao.maps.LatLng(lat, lng), content: container, yAnchor: 1 });
+            overlay.setMap(map);
+            
+            // 💡 관리용 데이터 객체에 오버레이 객체 연결
+            if (isNew) savedPins.push({ lat, lng, memo, address, overlay });
+            else {
+                // 저장소에서 불러온 경우 마지막 요소에 오버레이 연결
+                const lastIdx = savedPins.length - 1;
+                savedPins[savedPins.length] = { lat, lng, memo, address, overlay };
             }
+            updatePinScale();
         }
 
-        function initPassedPolyline() {
-            passedPolyline = new kakao.maps.Polyline({ path: [], strokeWeight: getDynamicWeight(), strokeColor: '#8E8E93', strokeOpacity: 1.0, strokeStyle: 'solid' });
-            passedPolyline.setMap(map);
-        }
-
-        function updateTotalRouteLength() {
-            totalRouteLengthMeters = loadedRoutes.filter(r => r.visible).reduce((sum, r) => sum + r.length, 0);
-            updateProgressUI();
-        }
-
-        function recalculatePassedDistance() {
-            totalPassedLengthMeters = 0; if (passedPathCoordinates.length < 2) return;
-            for (let i = 1; i < passedPathCoordinates.length; i++) {
-                const p1 = passedPathCoordinates[i-1]; const p2 = passedPathCoordinates[i];
-                totalPassedLengthMeters += turf.distance(turf.point([p1.getLng(), p1.getLat()]), turf.point([p2.getLng(), p2.getLat()]), {units: 'meters'});
-            }
-        }
-
+        // ==========================================
+        // 🚀 코어 엔진 (스무딩, 주행, 자동복귀 등)
+        // ==========================================
         function updateProgressUI() {
-            if (totalRouteLengthMeters <= 0) { progressPercent.innerText = "진행률 0%"; progressBarFill.style.width = "0%"; return; }
-            let percent = (totalPassedLengthMeters / totalRouteLengthMeters) * 100;
-            if (percent > 100) percent = 100;
+            if (totalRouteLengthMeters <= 0) return;
+            let percent = Math.min(100, (totalPassedLengthMeters / totalRouteLengthMeters) * 100);
             progressPercent.innerText = `현재 진행률 ${percent.toFixed(1)}%`;
             progressBarFill.style.width = `${percent}%`;
         }
 
-        async function requestWakeLock() { if ('wakeLock' in navigator) try { wakeLock = await navigator.wakeLock.request('screen'); } catch (err) {} }
-        document.addEventListener('visibilitychange', async () => { if (wakeLock !== null && document.visibilityState === 'visible') requestWakeLock(); });
+        function updatePinScale() {
+            const level = map.getLevel();
+            let scale = level <= 1 ? 1.2 : (level === 2 ? 1.0 : (level === 3 ? 0.85 : (level === 4 ? 0.7 : 0.55)));
+            document.querySelectorAll('.pin-container').forEach(pin => pin.style.transform = `scale(${scale})`);
+        }
 
         function getDynamicWeight() {
             const level = map.getLevel();
-            if (level <= 1) return 16; if (level === 2) return 12; if (level === 3) return 8; if (level === 4) return 5; return 3;
+            return level <= 1 ? 16 : (level === 2 ? 12 : (level === 3 ? 8 : (level === 4 ? 5 : 3)));
         }
 
         function updateLineWeight() {
@@ -357,46 +304,71 @@
             if (passedPolyline) passedPolyline.setOptions({ strokeWeight: w });
         }
 
-        function updatePinScale() {
-            const level = map.getLevel();
-            let scale = level <= 1 ? 1.2 : (level === 2 ? 1.0 : (level === 3 ? 0.85 : (level === 4 ? 0.7 : 0.55)));
-            document.querySelectorAll('.pin-container').forEach(pin => { pin.style.transform = `scale(${scale})`; });
+        function initPassedPolyline() {
+            passedPolyline = new kakao.maps.Polyline({ path: [], strokeWeight: getDynamicWeight(), strokeColor: '#8E8E93', strokeOpacity: 1.0, strokeStyle: 'solid' });
+            passedPolyline.setMap(map);
         }
+
+        function recalculatePassedDistance() {
+            totalPassedLengthMeters = 0; if (passedPathCoordinates.length < 2) return;
+            for (let i = 1; i < passedPathCoordinates.length; i++) {
+                const p1 = passedPathCoordinates[i-1], p2 = passedPathCoordinates[i];
+                totalPassedLengthMeters += turf.distance(turf.point([p1.getLng(), p1.getLat()]), turf.point([p2.getLng(), p2.getLat()]), {units: 'meters'});
+            }
+        }
+
+        function addRouteToMap(geojsonData, name, color, visible) {
+            let kakaoPaths = []; let segments = []; let length = 0; let bounds = new kakao.maps.LatLngBounds();
+            try {
+                let sId = 0;
+                turf.segmentEach(geojsonData, (s) => { s.segmentId = `r_${loadedRoutes.length}_${sId++}`; segments.push(s); });
+                turf.coordEach(geojsonData, (c) => { const lp = new kakao.maps.LatLng(c[1], c[0]); kakaoPaths.push(lp); bounds.extend(lp); });
+                length = turf.length(geojsonData, {units: 'meters'});
+            } catch(e) {}
+            const poly = new kakao.maps.Polyline({ path: kakaoPaths, strokeWeight: getDynamicWeight(), strokeColor: color, strokeOpacity: 0.6, strokeStyle: 'solid' });
+            if (visible) poly.setMap(map);
+            loadedRoutes.push({ id: Date.now(), name, color, visible, data: geojsonData, polyline: poly, segments, length });
+            if (visible && kakaoPaths.length > 0) map.setBounds(bounds);
+            if (!passedPolyline) initPassedPolyline();
+            totalRouteLengthMeters = loadedRoutes.filter(r => r.visible).reduce((s, r) => s + r.length, 0);
+            updateProgressUI();
+        }
+
+        document.getElementById('geojson-input').onchange = (e) => {
+            Array.from(e.target.files).forEach(file => {
+                const reader = new FileReader();
+                reader.onload = (ev) => {
+                    const ext = file.name.split('.').pop().toLowerCase();
+                    let data = null;
+                    if (ext === 'kml' || ext === 'gpx') data = ext === 'kml' ? toGeoJSON.kml(new DOMParser().parseFromString(ev.target.result, 'text/xml')) : toGeoJSON.gpx(new DOMParser().parseFromString(ev.target.result, 'text/xml'));
+                    else data = JSON.parse(ev.target.result);
+                    addRouteToMap(data, file.name, routeColors[loadedRoutes.length % 5], true);
+                    saveToLocalStorage();
+                };
+                reader.readAsText(file);
+            });
+        };
 
         kakao.maps.event.addListener(map, 'zoom_changed', () => { updateLineWeight(); updatePinScale(); if (!isAutoFollowing) lastMapInteractionTime = Date.now(); });
         kakao.maps.event.addListener(map, 'dragstart', () => { isAutoFollowing = false; locateBtn.classList.remove('active-follow'); locateBtn.innerText = "📍 수동 (주행 시 자동복귀)"; lastMapInteractionTime = Date.now(); });
-        kakao.maps.event.addListener(map, 'dragend', () => { lastMapInteractionTime = Date.now(); });
+        kakao.maps.event.addListener(map, 'dragend', () => lastMapInteractionTime = Date.now());
 
-        locateBtn.addEventListener('click', function() {
-            if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
-                DeviceOrientationEvent.requestPermission().then(res => { if (res === 'granted') window.addEventListener('deviceorientation', handleOrientation); });
-            } else window.addEventListener('deviceorientationabsolute', handleOrientation, true);
-            requestWakeLock(); lastMapInteractionTime = 0; isAutoFollowing = true; this.classList.add('active-follow'); this.innerText = "🎯 실시간 추적 중";
-            if (targetLat !== null && targetLng !== null) map.panTo(new kakao.maps.LatLng(targetLat, targetLng));
-        });
+        locateBtn.onclick = () => {
+            isAutoFollowing = true; lastMapInteractionTime = 0;
+            locateBtn.classList.add('active-follow'); locateBtn.innerText = "🎯 실시간 추적 중";
+            if (targetLat) map.panTo(new kakao.maps.LatLng(targetLat, targetLng));
+        };
 
-        function handleOrientation(event) {
-            let heading = event.webkitCompassHeading || (360 - event.alpha);
-            if (heading && userMarker && movementBearing === null) userMarker.setContent(getArrowHTML(heading));
-        }
-        window.addEventListener('deviceorientationabsolute', handleOrientation, true);
-
-        function getArrowHTML(heading) {
-            return `<div style="width: 32px; height: 32px; transform: rotate(${heading || 0}deg); transform-origin: center center;">
-                        <svg viewBox="0 0 100 100" style="width: 100%; height: 100%; filter: drop-shadow(0px 2px 3px rgba(0,0,0,0.4));">
-                            <polygon points="50,10 90,90 50,70 10,90" fill="#4285F4" stroke="white" stroke-width="4"/>
-                        </svg></div>`;
-        }
+        function getArrowHTML(h) { return `<div style="width: 32px; height: 32px; transform: rotate(${h||0}deg);"><svg viewBox="0 0 100 100"><polygon points="50,10 90,90 50,70 10,90" fill="#4285F4" stroke="white" stroke-width="4"/></svg></div>`; }
 
         function smoothAnimate() {
-            if (targetLat !== null && userMarker) {
-                if (currentDisplayLat === null) { currentDisplayLat = targetLat; currentDisplayLng = targetLng; }
-                const now = Date.now(); const timeSinceLastGps = now - lastGpsTime;
-                if (timeSinceLastGps > 1000 && currentSpeedMs > 0.5) {
-                    const moveDist = currentSpeedMs * (16.6 / 1000); 
-                    const currentHeading = lastHeading !== null ? lastHeading : (movementBearing || 0);
-                    const predicted = turf.destination(turf.point([targetLng, targetLat]), moveDist, currentHeading, {units: 'meters'});
-                    targetLng = predicted.geometry.coordinates[0]; targetLat = predicted.geometry.coordinates[1];
+            if (targetLat && userMarker) {
+                if (!currentDisplayLat) { currentDisplayLat = targetLat; currentDisplayLng = targetLng; }
+                const now = Date.now();
+                if (now - lastGpsTime > 1000 && currentSpeedMs > 0.5) {
+                    const move = currentSpeedMs * (16.6 / 1000);
+                    const pred = turf.destination(turf.point([targetLng, targetLat]), move, movementBearing || lastHeading || 0, {units: 'meters'});
+                    targetLng = pred.geometry.coordinates[0]; targetLat = pred.geometry.coordinates[1];
                 }
                 currentDisplayLat += (targetLat - currentDisplayLat) * 0.1; currentDisplayLng += (targetLng - currentDisplayLng) * 0.1;
                 userMarker.setPosition(new kakao.maps.LatLng(currentDisplayLat, currentDisplayLng));
@@ -405,70 +377,52 @@
         }
 
         function startTracking() {
-            if (!navigator.geolocation) return;
             navigator.geolocation.watchPosition((pos) => {
-                const { latitude: rawLat, longitude: rawLng, speed, accuracy, heading } = pos.coords;
-                const currentKmh = (speed || 0) * 3.6;
-                speedPanel.innerText = `${currentKmh.toFixed(1)} km/h`;
+                const { latitude: rLat, longitude: rLng, speed, accuracy, heading } = pos.coords;
+                const kmh = (speed || 0) * 3.6;
+                speedPanel.innerText = `${kmh.toFixed(1)} km/h`;
                 currentSpeedMs = speed || 0; lastGpsTime = Date.now();
                 gpsDot.className = accuracy < 15 ? "status-good" : (accuracy < 40 ? "status-normal" : "status-bad");
-                gpsText.innerText = `GPS ${accuracy < 15 ? '양호' : (accuracy < 40 ? '보통' : '불량')} (${accuracy.toFixed(1)}m)`;
-                gpsText.style.color = accuracy < 15 ? "#00c853" : (accuracy < 40 ? "#ffab00" : "#ff1744");
-
-                if (heading !== null && !isNaN(heading) && speed > 0.5) lastHeading = heading;
-                let fLat = rawLat, fLng = rawLng; const now = Date.now();
-
-                if (lastValidPos && lastValidTime) {
-                    const dt = (now - lastValidTime) / 1000;
-                    if (dt > 0) {
-                        const distJump = turf.distance(turf.point([lastValidPos.lng, lastValidPos.lat]), turf.point([rawLng, rawLat]), {units: 'meters'});
-                        if (distJump / dt > 25 && accuracy > 10) { fLat = lastValidPos.lat * 0.8 + rawLat * 0.2; fLng = lastValidPos.lng * 0.8 + rawLng * 0.2; }
-                        else { fLat = lastValidPos.lat * 0.2 + rawLat * 0.8; fLng = lastValidPos.lng * 0.2 + rawLng * 0.8; }
-                    }
+                gpsText.innerText = `GPS ${accuracy < 15 ? '양호' : '보통'} (${accuracy.toFixed(1)}m)`;
+                if (speed > 0.5 && heading !== null) lastHeading = heading;
+                
+                let fLat = rLat, fLng = rLng;
+                if (lastValidPos) {
+                    const dt = (Date.now() - lastValidTime) / 1000;
+                    if (dt > 0 && turf.distance(turf.point([lastValidPos.lng, lastValidPos.lat]), turf.point([rLng, rLat]), {units:'meters'})/dt > 25) { fLat = lastValidPos.lat*0.8+rLat*0.2; fLng = lastValidPos.lng*0.8+rLng*0.2; }
                 }
-                lastValidPos = { lat: fLat, lng: fLng }; lastValidTime = now;
+                lastValidPos = {lat: fLat, lng: fLng}; lastValidTime = Date.now();
 
-                const activeSegments = loadedRoutes.filter(r => r.visible).flatMap(r => r.segments);
-                if (activeSegments.length > 0) {
-                    const userPoint = turf.point([fLng, fLat]); 
-                    let snapThreshold = Math.min(25, Math.max(currentSpeedMs > 4.1 ? 15 : 10, accuracy * 0.6));
-                    let minDWithout = Infinity, minDWith = Infinity, bestSWithout = null, bestS = null;
-                    for (const s of activeSegments) {
-                        let d = turf.pointToLineDistance(userPoint, s, {units: 'meters'});
-                        if (d < minDWithout) { minDWithout = d; bestSWithout = s; }
-                        if (d <= snapThreshold) {
-                            if (lastHeading !== null) {
-                                const p1 = s.geometry.coordinates[0], p2 = s.geometry.coordinates[1];
-                                const sH = turf.bearing(p1, p2) < 0 ? turf.bearing(p1, p2) + 360 : turf.bearing(p1, p2);
-                                let hD = Math.abs(lastHeading - sH) % 360; hD = hD > 180 ? 360 - hD : hD;
-                                if (hD <= 90 && d < minDWith) { minDWith = d; bestS = s; }
-                            }
-                        }
-                    }
-                    if (minDWithout > 25) offRouteWarning.style.display = 'block'; else offRouteWarning.style.display = 'none';
-                    const targetSegment = bestS || (minDWithout <= snapThreshold ? bestSWithout : null);
-                    if (targetSegment) { const snapped = turf.nearestPointOnLine(targetSegment, userPoint); fLat = snapped.geometry.coordinates[1]; fLng = snapped.geometry.coordinates[0]; }
+                const activeSegs = loadedRoutes.filter(r => r.visible).flatMap(r => r.segments);
+                if (activeSegs.length > 0) {
+                    const userPt = turf.point([fLng, fLat]);
+                    const snapDist = Math.min(25, Math.max(10, accuracy * 0.6));
+                    let minD = Infinity, bestS = null;
+                    activeSegs.forEach(s => {
+                        let d = turf.pointToLineDistance(userPt, s, {units: 'meters'});
+                        if (d < minD && d <= snapDist) { minD = d; bestS = s; }
+                    });
+                    if (bestS) { const snp = turf.nearestPointOnLine(bestS, userPt); fLat = snp.geometry.coordinates[1]; fLng = snp.geometry.coordinates[0]; }
                 }
 
-                if (passedPathCoordinates.length === 0) { passedPathCoordinates.push(new kakao.maps.LatLng(fLat, fLng)); if(passedPolyline) passedPolyline.setPath(passedPathCoordinates); lastPathTime = now; }
+                if (passedPathCoordinates.length === 0) { passedPathCoordinates.push(new kakao.maps.LatLng(fLat, fLng)); lastPathTime = Date.now(); }
                 else {
-                    const lastPoint = passedPathCoordinates[passedPathCoordinates.length-1];
-                    const distFromLast = turf.distance(turf.point([fLng, fLat]), turf.point([lastPoint.getLng(), lastPoint.getLat()]), {units: 'meters'});
-                    let timeSinceLastPath = (now - lastPathTime) / 1000; if (timeSinceLastPath <= 0) timeSinceLastPath = 1; 
-                    if (distFromLast > 1 && (distFromLast / timeSinceLastPath) < 40) { passedPathCoordinates.push(new kakao.maps.LatLng(fLat, fLng)); if(passedPolyline) passedPolyline.setPath(passedPathCoordinates); lastPathTime = now; totalPassedLengthMeters += distFromLast; updateProgressUI(); }
+                    const dist = turf.distance(turf.point([fLng, fLat]), turf.point([passedPathCoordinates[passedPathCoordinates.length-1].getLng(), passedPathCoordinates[passedPathCoordinates.length-1].getLat()]), {units:'meters'});
+                    if (dist > 1 && dist/((Date.now()-lastPathTime)/1000) < 40) { passedPathCoordinates.push(new kakao.maps.LatLng(fLat, fLng)); lastPathTime = Date.now(); totalPassedLengthMeters += dist; updateProgressUI(); if(passedPolyline) passedPolyline.setPath(passedPathCoordinates); }
                 }
 
                 targetLat = fLat; targetLng = fLng;
-                if (prevFinalLat) { if (turf.distance(turf.point([prevFinalLng, prevFinalLat]), turf.point([fLng, fLat]), {units: 'meters'}) > 1) { movementBearing = (turf.bearing(turf.point([prevFinalLng, prevFinalLat]), turf.point([fLng, fLat])) + 360) % 360; prevFinalLat = fLat; prevFinalLng = fLng; } }
-                else { prevFinalLat = fLat; prevFinalLng = fLng; }
+                if (prevFinalLat && turf.distance(turf.point([prevFinalLng, prevFinalLat]), turf.point([fLng, fLat]), {units:'meters'}) > 1) {
+                    movementBearing = (turf.bearing(turf.point([prevFinalLng, prevFinalLat]), turf.point([fLng, fLat])) + 360) % 360;
+                }
+                prevFinalLat = fLat; prevFinalLng = fLng;
 
-                if (!userMarker) { userMarker = new kakao.maps.CustomOverlay({ position: new kakao.maps.LatLng(fLat, fLng), content: getArrowHTML(movementBearing || lastHeading || 0), xAnchor: 0.5, yAnchor: 0.5 }); userMarker.setMap(map); smoothAnimate(); }
-                else { userMarker.setContent(getArrowHTML(movementBearing || lastHeading || 0)); }
-                
-                if (!isAutoFollowing && lastMapInteractionTime > 0) { if (Date.now() - lastMapInteractionTime > 5000 && currentKmh >= 5.0) { isAutoFollowing = true; locateBtn.classList.add('active-follow'); locateBtn.innerText = "🎯 실시간 추적 중"; lastMapInteractionTime = 0; } }
+                if (!userMarker) { userMarker = new kakao.maps.CustomOverlay({ position: new kakao.maps.LatLng(fLat, fLng), content: getArrowHTML(movementBearing||lastHeading), xAnchor: 0.5, yAnchor: 0.5 }); userMarker.setMap(map); smoothAnimate(); }
+                else userMarker.setContent(getArrowHTML(movementBearing||lastHeading));
+
+                if (!isAutoFollowing && lastMapInteractionTime > 0 && Date.now() - lastMapInteractionTime > 5000 && kmh >= 5.0) { isAutoFollowing = true; locateBtn.classList.add('active-follow'); locateBtn.innerText = "🎯 실시간 추적 중"; }
                 if (isAutoFollowing) map.panTo(new kakao.maps.LatLng(fLat, fLng));
-
-            }, (err) => {}, { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 });
+            }, null, { enableHighAccuracy: true });
         }
 
         window.onload = () => { loadFromLocalStorage(); startTracking(); setInterval(saveToLocalStorage, 3000); };
